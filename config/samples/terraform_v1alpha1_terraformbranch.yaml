@@ -1,0 +1,9 @@
+apiVersion: terraform.terrakojo.io/v1alpha1
+kind: TerraformBranch
+metadata:
+  labels:
+    app.kubernetes.io/name: terrakojo
+    app.kubernetes.io/managed-by: kustomize
+  name: terraformbranch-sample
+spec:
+  # TODO(user): Add fields here

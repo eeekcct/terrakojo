@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- terraform_v1alpha1_terraformrepository.yaml
+- terraform_v1alpha1_terraformbranch.yaml
+- terraform_v1alpha1_terraformrun.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

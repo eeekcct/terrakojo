@@ -18,3 +18,17 @@ resources:
 - metrics_auth_role.yaml
 - metrics_auth_role_binding.yaml
 - metrics_reader_role.yaml
+# For each CRD, "Admin", "Editor" and "Viewer" roles are scaffolded by
+# default, aiding admins in cluster management. Those roles are
+# not used by the terrakojo itself. You can comment the following lines
+# if you do not want those helpers be installed with your Project.
+- terraformrun_admin_role.yaml
+- terraformrun_editor_role.yaml
+- terraformrun_viewer_role.yaml
+- terraformbranch_admin_role.yaml
+- terraformbranch_editor_role.yaml
+- terraformbranch_viewer_role.yaml
+- terraformrepository_admin_role.yaml
+- terraformrepository_editor_role.yaml
+- terraformrepository_viewer_role.yaml
+
