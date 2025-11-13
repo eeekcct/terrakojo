@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2025 eeekcct.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,9 +30,11 @@ type RepositorySpec struct {
 	// The following markers will use OpenAPI v3 schema to validate the value
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
-	// foo is an example field of Repository. Edit repository_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
+	// +required
+	URL string `json:"url"`
+
+	// +required
+	DefaultBranch string `json:"defaultBranch"`
 }
 
 // RepositoryStatus defines the observed state of Repository.
@@ -56,6 +58,10 @@ type RepositoryStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	BranchRefs []string `json:"branchRefs,omitempty"`
+
+	Synced bool `json:"synced,omitempty"`
 }
 
 // +kubebuilder:object:root=true
