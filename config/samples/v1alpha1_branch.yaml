@@ -1,0 +1,12 @@
+apiVersion: terrakojo.io/v1alpha1
+kind: Branch
+metadata:
+  labels:
+    app.kubernetes.io/name: terrakojo
+    app.kubernetes.io/managed-by: kustomize
+  name: branch-sample
+spec:
+  repositoryRef: "repository-sample"
+  name: "feature-auth"
+  prNumber: 123
+  sha: "abc123def456789abcdef0123456789abcdef012"

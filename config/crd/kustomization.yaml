@@ -3,6 +3,9 @@
 # It should be run by config/default
 resources:
 - bases/terrakojo.io_repositories.yaml
+- bases/terrakojo.io_branches.yaml
+- bases/terrakojo.io_workflows.yaml
+- bases/terrakojo.io_workflowtemplates.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

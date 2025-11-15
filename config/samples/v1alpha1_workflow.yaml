@@ -1,10 +1,9 @@
 apiVersion: terrakojo.io/v1alpha1
-kind: Repository
+kind: Workflow
 metadata:
   labels:
     app.kubernetes.io/name: terrakojo
     app.kubernetes.io/managed-by: kustomize
-  name: repository-sample
+  name: workflow-sample
 spec:
-  url: "https://github.com/eeekcct/terrakojo.git"
-  defaultBranch: "main" 
+  # TODO(user): Add fields here

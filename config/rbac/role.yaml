@@ -7,7 +7,9 @@ rules:
 - apiGroups:
   - terrakojo.io
   resources:
+  - branches
   - repositories
+  - workflows
   verbs:
   - create
   - delete
@@ -19,13 +21,17 @@ rules:
 - apiGroups:
   - terrakojo.io
   resources:
+  - branches/finalizers
   - repositories/finalizers
+  - workflows/finalizers
   verbs:
   - update
 - apiGroups:
   - terrakojo.io
   resources:
+  - branches/status
   - repositories/status
+  - workflows/status
   verbs:
   - get
   - patch
