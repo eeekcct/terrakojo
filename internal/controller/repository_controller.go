@@ -101,7 +101,7 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 				log.Error(err, "Failed to create Branch resource", "branch", branchRef)
 				return err
 			}
-			log.Info("Created Branch resource", "branch", branchRef, "repository", repo.Name)
+			log.Info("Created Branch resource", "branch", branchRef, "namespace", repo.Namespace)
 		}
 	}
 
@@ -112,7 +112,7 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 				log.Error(err, "Failed to delete Branch resource", "branch", branchName)
 				return err
 			}
-			log.Info("Deleted Branch resource", "branch", branchName, "repository", repo.Name)
+			log.Info("Deleted Branch resource", "branch", branchName, "namespace", repo.Namespace)
 		}
 	}
 
@@ -154,7 +154,7 @@ func (r *RepositoryReconciler) isOwnedByRepository(branch *terrakojoiov1alpha1.B
 func (r *RepositoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&terrakojoiov1alpha1.Repository{}).
-		Owns(&terrakojoiov1alpha1.Branch{}). // Watch Branch resources owned by Repository
+		Owns(&terrakojoiov1alpha1.Branch{}).
 		Named("repository").
 		Complete(r)
 }

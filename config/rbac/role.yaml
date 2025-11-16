@@ -5,6 +5,18 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - terrakojo.io
   resources:
   - branches
@@ -36,3 +48,11 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - terrakojo.io
+  resources:
+  - workflowtemplates
+  verbs:
+  - get
+  - list
+  - watch

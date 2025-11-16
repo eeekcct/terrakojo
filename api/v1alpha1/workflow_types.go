@@ -60,8 +60,7 @@ type WorkflowStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	Jobs  []string `json:"jobs,omitempty"`
-	Phase string   `json:"phase,omitempty"` // e.g., Pending, Running, Succeeded, Failed
+	Jobs []string `json:"jobs,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -127,8 +127,6 @@ spec:
                 items:
                   type: string
                 type: array
-              phase:
-                type: string
             type: object
         required:
         - spec

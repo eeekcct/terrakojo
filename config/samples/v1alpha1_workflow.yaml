@@ -6,4 +6,5 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: workflow-sample
 spec:
-  # TODO(user): Add fields here
+  branchRef: "branch-sample"
+  workflowTemplateRef: "workflowtemplate-sample"

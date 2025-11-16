@@ -42,6 +42,8 @@ type BranchReconciler struct {
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/finalizers,verbs=update
 
+// +kubebuilder:rbac:groups=terrakojo.io,resources=workflowtemplates,verbs=get;list;watch
+
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
@@ -70,26 +72,30 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			"Failed to list WorkflowTemplates",
 		)
 		if err := r.Status().Update(ctx, &branch); err != nil {
-			log.Error(err, "unable to update Branch status after failing to list WorkflowTemplates")
+			log.Error(err, "unable to update Branch status after failing to list WorkflowTemplates", "branch", branch.Name, "namespace", branch.Namespace)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	changedFiles := branch.Status.ChangedFiles
+	if len(changedFiles) == 0 {
+		return ctrl.Result{}, nil
 	}
 
 	matched := &terrakojoiov1alpha1.WorkflowTemplate{}
 
 	for _, t := range templates.Items {
-		if matchTemplate(t.Spec.Match, branch.Status.ChangedFiles) {
+		if matchTemplate(t.Spec.Match, changedFiles) {
 			matched = &t
 			break
 		}
 	}
 
 	if matched.Name == "" {
-		log.Info("No matching WorkflowTemplate found for Branch", "branch", branch.Name)
+		log.Info("No matching WorkflowTemplate found for Branch", "branch", branch.Name, "namespace", branch.Namespace, "changedFiles", changedFiles)
 		return ctrl.Result{}, nil
 	}
 
-	// For now, we make one workflow per branch
 	wfName := fmt.Sprintf("%s-workflow", branch.Name)
 	if err := r.Get(ctx, client.ObjectKey{Name: wfName, Namespace: branch.Namespace}, &terrakojoiov1alpha1.Workflow{}); err == nil {
 		// Workflow already exists, nothing to do
@@ -114,6 +120,8 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Create(ctx, workflow); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	log.Info("Created Workflow for Branch", "workflow", wfName, "branch", branch.Name, "namespace", branch.Namespace)
 
 	// update Branch status to reflect the created Workflow
 	branch.Status.Workflows = append(branch.Status.Workflows, wfName)
