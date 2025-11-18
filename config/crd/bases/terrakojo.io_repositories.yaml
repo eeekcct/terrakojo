@@ -41,18 +41,41 @@ spec:
             properties:
               defaultBranch:
                 type: string
-              url:
+              name:
+                type: string
+              owner:
+                type: string
+              type:
                 type: string
             required:
             - defaultBranch
-            - url
+            - name
+            - owner
+            - type
             type: object
           status:
             description: status defines the observed state of Repository
             properties:
-              branchRefs:
+              branchList:
+                description: |-
+                  BranchList contains the list of branches associated with this repository
+                  Each branch contains detailed information including commit SHA and PR number
                 items:
-                  type: string
+                  description: BranchInfo represents a branch within a repository
+                  properties:
+                    prNumber:
+                      description: PRNumber is the pull request number associated
+                        with this branch (if any)
+                      type: integer
+                    ref:
+                      description: Ref is the branch name (e.g., "main", "feature/test")
+                      type: string
+                    sha:
+                      description: SHA is the commit SHA of the branch head
+                      type: string
+                  required:
+                  - ref
+                  type: object
                 type: array
               conditions:
                 description: |-
@@ -124,6 +147,8 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               synced:
+                description: Synced indicates whether the repository has been successfully
+                  synced
                 type: boolean
             type: object
         required:

@@ -58,6 +58,12 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Ensure required labels are present
+	if err := r.ensureLabels(ctx, &repo); err != nil {
+		log.Error(err, "Failed to ensure labels")
+		return ctrl.Result{}, err
+	}
+
 	// Get existing Branch resources owned by this Repository
 	var branchList terrakojoiov1alpha1.BranchList
 	err := r.List(ctx, &branchList, client.InNamespace(req.Namespace))
@@ -84,14 +90,56 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
+// ensureLabels ensures that the Repository has the required labels for efficient querying
+func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
+	log := logf.FromContext(ctx)
+
+	if repo.Labels == nil {
+		repo.Labels = make(map[string]string)
+	}
+
+	needsUpdate := false
+
+	// Ensure owner label
+	ownerLabel := "terrakojo.io/owner"
+	if repo.Labels[ownerLabel] != repo.Spec.Owner {
+		repo.Labels[ownerLabel] = repo.Spec.Owner
+		needsUpdate = true
+	}
+
+	// Ensure repository name label
+	repoNameLabel := "terrakojo.io/repo-name"
+	if repo.Labels[repoNameLabel] != repo.Spec.Name {
+		repo.Labels[repoNameLabel] = repo.Spec.Name
+		needsUpdate = true
+	}
+
+	// Ensure managed-by label
+	managedByLabel := "app.kubernetes.io/managed-by"
+	managedByValue := "terrakojo-controller"
+	if repo.Labels[managedByLabel] != managedByValue {
+		repo.Labels[managedByLabel] = managedByValue
+		needsUpdate = true
+	}
+
+	if needsUpdate {
+		log.Info("Updating Repository labels", "name", repo.Name, "namespace", repo.Namespace)
+		if err := r.Update(ctx, repo); err != nil {
+			return fmt.Errorf("failed to update Repository labels: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // syncBranches synchronizes BranchRefs in Repository status with actual Branch resources
 func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojoiov1alpha1.Repository, existingBranches map[string]terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
 	// Convert BranchRefs to map for easier lookup
 	branchRefsMap := make(map[string]bool)
-	for _, branchRef := range repo.Status.BranchRefs {
-		branchRefsMap[branchRef] = true
+	for _, branch := range repo.Status.BranchList {
+		branchRefsMap[branch.Ref] = true
 	}
 
 	// 1. Create Branch resources for BranchRefs that don't exist

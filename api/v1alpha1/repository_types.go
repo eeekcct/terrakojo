@@ -23,6 +23,21 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+// BranchInfo represents a branch within a repository
+type BranchInfo struct {
+	// Ref is the branch name (e.g., "main", "feature/test")
+	// +required
+	Ref string `json:"ref"`
+
+	// PRNumber is the pull request number associated with this branch (if any)
+	// +optional
+	PRNumber int `json:"prNumber,omitempty"`
+
+	// SHA is the commit SHA of the branch head
+	// +optional
+	SHA string `json:"sha,omitempty"`
+}
+
 // RepositorySpec defines the desired state of Repository
 type RepositorySpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -31,7 +46,13 @@ type RepositorySpec struct {
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
 	// +required
-	URL string `json:"url"`
+	Owner string `json:"owner"`
+
+	// +required
+	Name string `json:"name"`
+
+	// +required
+	Type string `json:"type"`
 
 	// +required
 	DefaultBranch string `json:"defaultBranch"`
@@ -59,8 +80,13 @@ type RepositoryStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	BranchRefs []string `json:"branchRefs,omitempty"`
+	// BranchList contains the list of branches associated with this repository
+	// Each branch contains detailed information including commit SHA and PR number
+	// +optional
+	BranchList []BranchInfo `json:"branchList,omitempty"`
 
+	// Synced indicates whether the repository has been successfully synced
+	// +optional
 	Synced bool `json:"synced,omitempty"`
 }
 
