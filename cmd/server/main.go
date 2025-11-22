@@ -5,11 +5,16 @@ import (
 	"net/http"
 
 	"github.com/eeekcct/terrakojo/internal/config"
+	"github.com/eeekcct/terrakojo/internal/kubernetes"
 	"github.com/eeekcct/terrakojo/internal/webhook"
 )
 
 func main() {
-	handler, err := webhook.NewHandler(config.LoadConfig(), nil)
+	client, err := kubernetes.NewClient()
+	if err != nil {
+		log.Fatalf("Failed to create Kubernetes client: %v", err)
+	}
+	handler, err := webhook.NewHandler(config.LoadConfig(), client)
 	if err != nil {
 		log.Fatalf("Failed to create webhook handler: %v", err)
 	}

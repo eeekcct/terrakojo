@@ -9,7 +9,7 @@ type Config struct {
 
 func LoadConfig() *Config {
 	return &Config{
-		WebhookGithubSecret: getEnv("GITHUB_WEBHOOK_SECRET", "your-secret-here"),
+		WebhookGithubSecret: getEnv("GITHUB_WEBHOOK_SECRET", ""),
 		GitHubToken:         getEnv("GITHUB_TOKEN", ""),
 	}
 }
