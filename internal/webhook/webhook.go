@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/eeekcct/terrakojo/api/v1alpha1"
 	"github.com/eeekcct/terrakojo/internal/config"
@@ -69,9 +70,14 @@ func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	// Process the payload based on its type
 	switch event := payload.(type) {
 	case github.PullRequestPayload:
+		log.Printf("Processing GitHub pull request event: action=%s, PR #%d, repo=%s, branch=%s, sha=%s",
+			string(event.Action), event.PullRequest.Number, event.Repository.FullName, event.PullRequest.Head.Ref, event.PullRequest.Head.Sha)
 		webhookInfo = ghpkg.ProcessPullRequestEvent(event)
 
 	case github.PushPayload:
+		branchName := strings.TrimPrefix(event.Ref, "refs/heads/")
+		log.Printf("Processing GitHub push event: repo=%s, branch=%s, sha=%s",
+			event.Repository.FullName, branchName, event.After)
 		webhookInfo = ghpkg.ProcessPushEvent(event)
 
 	case github.PingPayload:
@@ -151,7 +157,7 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 
 	if len(repositories.Items) == 0 {
 		log.Printf("Repository with spec.owner=%s spec.name=%s not found", webhookInfo.Owner, webhookInfo.RepositoryName)
-		return nil // Don't treat as error, just skip
+		return nil
 	}
 
 	if len(repositories.Items) > 1 {

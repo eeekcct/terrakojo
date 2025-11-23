@@ -30,6 +30,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
+	"github.com/eeekcct/terrakojo/internal/config"
+	"github.com/eeekcct/terrakojo/internal/github"
 )
 
 // BranchReconciler reconciles a Branch object
@@ -61,6 +63,28 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	lastSHA := branch.Annotations["terrakojo.io/last-sha"]
+	if lastSHA == branch.Spec.SHA {
+		// No changes in SHA, nothing to do
+		return ctrl.Result{}, nil
+	}
+
+	config := config.LoadConfig()
+	ghClient, err := github.NewClient(ctx, config)
+	if err != nil {
+		log.Error(err, "unable to create GitHub client")
+		return ctrl.Result{}, err
+	}
+
+	changedFiles, err := ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
+	if err != nil {
+		log.Error(err, "unable to get changed files from GitHub")
+		return ctrl.Result{}, err
+	}
+	if len(changedFiles) == 0 {
+		return ctrl.Result{}, nil
+	}
+
 	var templates terrakojoiov1alpha1.WorkflowTemplateList
 	if err := r.List(ctx, &templates); err != nil {
 		log.Error(err, "unable to list WorkflowTemplates")
@@ -77,13 +101,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	changedFiles := branch.Status.ChangedFiles
-	if len(changedFiles) == 0 {
-		return ctrl.Result{}, nil
-	}
-
 	matched := &terrakojoiov1alpha1.WorkflowTemplate{}
-
 	for _, t := range templates.Items {
 		if matchTemplate(t.Spec.Match, changedFiles) {
 			matched = &t
@@ -125,10 +143,23 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// update Branch status to reflect the created Workflow
 	branch.Status.Workflows = append(branch.Status.Workflows, wfName)
+	branch.Status.ChangedFiles = changedFiles
 
 	// Set condition to indicate workflow was created successfully
 	r.setCondition(&branch, "WorkflowReady", metav1.ConditionTrue, "WorkflowCreated", fmt.Sprintf("Workflow %s created successfully", wfName))
 
+	// Update annotation with the current SHA before status update
+	if branch.Annotations == nil {
+		branch.Annotations = make(map[string]string)
+	}
+	branch.Annotations["terrakojo.io/last-sha"] = branch.Spec.SHA
+
+	// Update the Branch resource first to persist annotation changes
+	if err := r.Update(ctx, &branch); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Then update status
 	if err := r.Status().Update(ctx, &branch); err != nil {
 		return ctrl.Result{}, err
 	}

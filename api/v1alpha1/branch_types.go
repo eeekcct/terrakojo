@@ -31,7 +31,10 @@ type BranchSpec struct {
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
 	// +required
-	RepositoryRef string `json:"repositoryRef"`
+	Owner string `json:"owner"`
+
+	// +required
+	Repository string `json:"repository"`
 
 	// +required
 	Name string `json:"name"`
@@ -41,9 +44,9 @@ type BranchSpec struct {
 	// +kubebuilder:validation:Maximum=99999999
 	PRNumber int `json:"prNumber,omitempty"`
 
-	// +optional
+	// +required
 	// +kubebuilder:validation:Pattern="^[a-f0-9]{40}$"
-	SHA string `json:"sha,omitempty"`
+	SHA string `json:"sha"`
 }
 
 // BranchStatus defines the observed state of Branch.

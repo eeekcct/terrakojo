@@ -171,12 +171,13 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchName string) error {
 	branch := &terrakojoiov1alpha1.Branch{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", repo.Name, branchName),
+			Name:      fmt.Sprintf("%s-%s", repo.Spec.Name, branchName),
 			Namespace: repo.Namespace,
 		},
 		Spec: terrakojoiov1alpha1.BranchSpec{
-			RepositoryRef: repo.Name,
-			Name:          branchName,
+			Owner:      repo.Spec.Owner,
+			Repository: repo.Spec.Name,
+			Name:       branchName,
 		},
 	}
 

@@ -1,7 +1,6 @@
 package github
 
 import (
-	"log"
 	"strings"
 
 	"github.com/go-playground/webhooks/v6/github"
@@ -34,9 +33,6 @@ func ProcessPullRequestEvent(event github.PullRequestPayload) *WebhookInfo {
 	repo := event.Repository
 	action := string(event.Action)
 
-	log.Printf("Processing GitHub pull request event: action=%s, PR #%d, repo=%s, branch=%s, sha=%s",
-		action, pr.Number, repo.FullName, pr.Head.Ref, pr.Head.Sha)
-
 	prNumber := int(pr.Number)
 	return &WebhookInfo{
 		EventType:          EventTypePR,
@@ -55,9 +51,6 @@ func ProcessPushEvent(event github.PushPayload) *WebhookInfo {
 	repo := event.Repository
 	// Extract branch name from ref (e.g., "refs/heads/main" -> "main")
 	branchName := strings.TrimPrefix(event.Ref, "refs/heads/")
-
-	log.Printf("Processing GitHub push event: repo=%s, branch=%s, sha=%s",
-		repo.FullName, branchName, event.After)
 
 	return &WebhookInfo{
 		EventType:          EventTypePush,
