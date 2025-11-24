@@ -31,6 +31,8 @@ type GitHubCredentials struct {
 type ClientInterface interface {
 	GetChangedFiles(owner, repo string, prNumber int) ([]string, error)
 	GetBranch(owner, repo, branchName string) (*github.Branch, error)
+	CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error)
+	UpdateCheckRun(owner, repo string, checkRunID int64, status, conclusion string) error
 }
 
 type Client struct {
@@ -115,4 +117,32 @@ func (c *Client) GetChangedFiles(owner, repo string, prNumber int) ([]string, er
 func (c *Client) GetBranch(owner, repo, branchName string) (*github.Branch, error) {
 	branch, _, err := c.client.Repositories.GetBranch(c.ctx, owner, repo, branchName, 3)
 	return branch, err
+}
+
+func (c *Client) CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error) {
+	checkRun, _, err := c.client.Checks.CreateCheckRun(c.ctx, owner, repo, github.CreateCheckRunOptions{
+		Name:    name,
+		HeadSHA: sha,
+		Status:  github.Ptr("queued"),
+	})
+	return checkRun, err
+}
+
+// UpdateCheckRun updates a check run status and conclusion
+func (c *Client) UpdateCheckRun(owner, repo string, checkRunID int64, status, conclusion string) error {
+	updateOptions := github.UpdateCheckRunOptions{
+		Status: &status,
+	}
+
+	// Only set conclusion for completed status
+	if status == "completed" && conclusion != "" {
+		updateOptions.Conclusion = &conclusion
+	}
+
+	_, _, err := c.client.Checks.UpdateCheckRun(c.ctx, owner, repo, checkRunID, updateOptions)
+	if err != nil {
+		return fmt.Errorf("failed to update check run: %w", err)
+	}
+
+	return nil
 }

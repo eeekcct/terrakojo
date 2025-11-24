@@ -19,9 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -30,7 +30,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
-	"github.com/eeekcct/terrakojo/internal/github"
 	"github.com/eeekcct/terrakojo/internal/kubernetes"
 )
 
@@ -38,7 +37,7 @@ import (
 type BranchReconciler struct {
 	client.Client
 	Scheme              *runtime.Scheme
-	GitHubClientManager *kubernetes.GitHubClientManager
+	GitHubClientManager kubernetes.GitHubClientManagerInterface
 }
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete
@@ -87,11 +86,8 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Cast to ClientInterface for API calls
-	var clientInterface github.ClientInterface = ghClient
-
 	// Get branch information from GitHub and update status
-	githubBranch, err := clientInterface.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
+	githubBranch, err := ghClient.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
 	if err != nil {
 		log.Error(err, "unable to get branch info from GitHub")
 		r.setCondition(&branch, "BranchInfoFailed", metav1.ConditionFalse, "GitHubApiFailed", fmt.Sprintf("Failed to get branch info: %v", err))
@@ -104,8 +100,8 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Update branch SHA in status if it has changed
 	if githubBranch.Commit != nil && githubBranch.Commit.SHA != nil {
 		currentSHA := *githubBranch.Commit.SHA
-		if branch.Status.SHA != currentSHA {
-			branch.Status.SHA = currentSHA
+		if branch.Spec.SHA != currentSHA {
+			branch.Spec.SHA = currentSHA
 			log.Info("Branch SHA updated", "branch", branch.Name, "sha", currentSHA)
 		}
 	}
@@ -113,7 +109,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Set condition to indicate branch info was retrieved successfully
 	r.setCondition(&branch, "BranchInfoReady", metav1.ConditionTrue, "BranchInfoRetrieved", "Branch information retrieved successfully from GitHub")
 
-	changedFiles, err := clientInterface.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
+	changedFiles, err := ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
 	if err != nil {
 		log.Error(err, "unable to get changed files from GitHub")
 		return ctrl.Result{}, err
@@ -247,8 +243,7 @@ func (r *BranchReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func matchTemplate(match terrakojoiov1alpha1.WorkflowMatch, changedFiles []string) bool {
 	for _, pattern := range match.Paths {
 		for _, file := range changedFiles {
-			matched, err := filepath.Match(pattern, file)
-			if err == nil && matched {
+			if matched, _ := doublestar.Match(pattern, file); matched {
 				return true
 			}
 		}

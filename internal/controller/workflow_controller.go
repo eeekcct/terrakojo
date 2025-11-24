@@ -33,12 +33,34 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
+	"github.com/eeekcct/terrakojo/internal/kubernetes"
+)
+
+// WorkflowPhase represents the phase of a workflow
+type WorkflowPhase string
+
+const (
+	// WorkflowPhasePending indicates the workflow is waiting to start
+	WorkflowPhasePending WorkflowPhase = "Pending"
+
+	// WorkflowPhaseRunning indicates the workflow is currently running
+	WorkflowPhaseRunning WorkflowPhase = "Running"
+
+	// WorkflowPhaseSucceeded indicates the workflow completed successfully
+	WorkflowPhaseSucceeded WorkflowPhase = "Succeeded"
+
+	// WorkflowPhaseFailed indicates the workflow failed
+	WorkflowPhaseFailed WorkflowPhase = "Failed"
+
+	// WorkflowPhaseCancelled indicates the workflow was cancelled
+	WorkflowPhaseCancelled WorkflowPhase = "Cancelled"
 )
 
 // WorkflowReconciler reconciles a Workflow object
 type WorkflowReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme              *runtime.Scheme
+	GitHubClientManager kubernetes.GitHubClientManagerInterface
 }
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete
@@ -69,21 +91,67 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	jobName := fmt.Sprintf("%s-job", workflow.Name)
+	var branch terrakojoiov1alpha1.Branch
+	if err := r.Get(ctx, client.ObjectKey{Name: workflow.Spec.BranchRef, Namespace: workflow.Namespace}, &branch); err != nil {
+		log.Error(err, "Failed to get Branch for Workflow",
+			"workflow", workflow.Name,
+			"branchRef", workflow.Spec.BranchRef)
+		return ctrl.Result{}, err
+	}
 
+	if r.GitHubClientManager == nil {
+		log.Error(nil, "GitHubClientManager not initialized")
+		return ctrl.Result{}, fmt.Errorf("GitHubClientManager not initialized")
+	}
+	ghClient, err := r.GitHubClientManager.GetClientForBranch(ctx, &branch)
+	if err != nil {
+		log.Error(err, "Failed to create GitHub client for workflow",
+			"workflow", workflow.Name,
+			"branch", branch.Name,
+			"owner", branch.Spec.Owner,
+			"repository", branch.Spec.Repository)
+		return ctrl.Result{}, err
+	}
+
+	jobName := fmt.Sprintf("%s-job", workflow.Name)
 	var job batchv1.Job
-	err := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job)
+	err = r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job)
 	if err != nil && client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, err
 	}
 	if err == nil {
 		// Job exists, update workflow status based on job status
-		if err := r.updateWorkflowStatus(ctx, &workflow, &job); err != nil {
+		phase, err := r.updateWorkflowStatus(ctx, &workflow, &job)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
+		err = ghClient.UpdateCheckRun(branch.Spec.Owner, branch.Spec.Repository, int64(workflow.Status.CheckRunID), status, conclusion)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 	}
 
+	// Create CheckRun
+	checkRun, err := ghClient.CreateCheckRun(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.SHA, "terrakojo")
+	if err != nil {
+		log.Error(err, "Failed to create GitHub CheckRun for workflow",
+			"workflow", workflow.Name,
+			"branch", branch.Name,
+			"owner", branch.Spec.Owner,
+			"repository", branch.Spec.Repository)
+		return ctrl.Result{}, err
+	}
+	workflow.Status.CheckRunID = int(checkRun.GetID())
+	if err := r.Status().Update(ctx, &workflow); err != nil {
+		log.Error(err, "Failed to update Workflow status with CheckRunID",
+			"workflow", workflow.Name,
+			"checkRunID", workflow.Status.CheckRunID)
+		return ctrl.Result{}, err
+	}
+
+	// Create Job from WorkflowTemplate
 	job = r.createJobFromTemplate(jobName, &template)
 
 	if err := controllerutil.SetControllerReference(&workflow, &job, r.Scheme); err != nil {
@@ -97,7 +165,13 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	log.Info("Created Job for Workflow", "jobName", job.Name, "workflowName", workflow.Name, "namespace", workflow.Namespace)
 
 	workflow.Status.Jobs = append(workflow.Status.Jobs, job.Name)
-	if err := r.updateWorkflowStatus(ctx, &workflow, &job); err != nil {
+	phase, err := r.updateWorkflowStatus(ctx, &workflow, &job)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
+	err = ghClient.UpdateCheckRun(branch.Spec.Owner, branch.Spec.Repository, int64(workflow.Status.CheckRunID), status, conclusion)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -169,24 +243,49 @@ func (r *WorkflowReconciler) normalizeContainerName(name string) string {
 	return normalized
 }
 
-func (r *WorkflowReconciler) updateWorkflowStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, job *batchv1.Job) error {
-	var status string
+func (r *WorkflowReconciler) updateWorkflowStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, job *batchv1.Job) (WorkflowPhase, error) {
+	var phase WorkflowPhase
 	if job.Status.Succeeded > 0 {
-		status = "Succeeded"
+		phase = WorkflowPhaseSucceeded
 	} else if job.Status.Failed > 0 {
-		status = "Failed"
+		phase = WorkflowPhaseFailed
 	} else if job.Status.Active > 0 {
-		status = "Running"
+		phase = WorkflowPhaseRunning
 	} else {
-		status = "Pending"
+		phase = WorkflowPhasePending
 	}
 
-	r.setCondition(workflow, "JobStatus", metav1.ConditionTrue, status, fmt.Sprintf("Job is in %s state", status))
+	r.setCondition(workflow, "JobStatus", metav1.ConditionTrue, string(phase), fmt.Sprintf("Job is in %s state", phase))
 
 	if err := r.Status().Update(ctx, workflow); err != nil {
-		return err
+		return phase, err
 	}
-	return nil
+	return phase, nil
+}
+
+func (r *WorkflowReconciler) checkRunStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) (string, string) {
+	var status, conclusion string
+	switch phase {
+	case WorkflowPhasePending:
+		status = "queued"
+		conclusion = ""
+	case WorkflowPhaseRunning:
+		status = "in_progress"
+		conclusion = ""
+	case WorkflowPhaseSucceeded:
+		status = "completed"
+		conclusion = "success"
+	case WorkflowPhaseFailed:
+		status = "completed"
+		conclusion = "failure"
+	case WorkflowPhaseCancelled:
+		status = "completed"
+		conclusion = "cancelled"
+	default:
+		status = "queued"
+		conclusion = ""
+	}
+	return status, conclusion
 }
 
 func (r *WorkflowReconciler) setCondition(workflow *terrakojoiov1alpha1.Workflow, conditionType string, status metav1.ConditionStatus, reason, message string) {

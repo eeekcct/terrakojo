@@ -60,7 +60,12 @@ type WorkflowStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// Jobs contains the list of Job names created for this workflow
+	// +optional
 	Jobs []string `json:"jobs,omitempty"`
+
+	// +optional
+	CheckRunID int `json:"checkRunID,omitempty"`
 }
 
 // +kubebuilder:object:root=true

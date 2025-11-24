@@ -19,6 +19,11 @@ type GitHubCredentials struct {
 	PrivateKey   string
 }
 
+type GitHubClientManagerInterface interface {
+	GetClientForRepository(ctx context.Context, repo *v1alpha1.Repository) (github.ClientInterface, error)
+	GetClientForBranch(ctx context.Context, branch *v1alpha1.Branch) (github.ClientInterface, error)
+}
+
 // GitHubClientManager manages GitHub client creation with Kubernetes secret integration
 type GitHubClientManager struct {
 	client.Client
@@ -32,7 +37,7 @@ func NewGitHubClientManager(k8sClient client.Client) *GitHubClientManager {
 }
 
 // GetClientForRepository gets a GitHub client for the specific repository
-func (m *GitHubClientManager) GetClientForRepository(ctx context.Context, repo *v1alpha1.Repository) (*github.Client, error) {
+func (m *GitHubClientManager) GetClientForRepository(ctx context.Context, repo *v1alpha1.Repository) (github.ClientInterface, error) {
 
 	// Get credentials from secret
 	creds, err := m.getCredentialsFromSecret(ctx, &repo.Spec.GitHubSecretRef, repo.Namespace)
@@ -44,7 +49,7 @@ func (m *GitHubClientManager) GetClientForRepository(ctx context.Context, repo *
 }
 
 // GetClientForBranch gets a GitHub client for the branch by finding its parent repository
-func (m *GitHubClientManager) GetClientForBranch(ctx context.Context, branch *v1alpha1.Branch) (*github.Client, error) {
+func (m *GitHubClientManager) GetClientForBranch(ctx context.Context, branch *v1alpha1.Branch) (github.ClientInterface, error) {
 
 	// Find the parent repository
 	repo, err := m.findRepositoryForBranch(ctx, branch)

@@ -35,7 +35,7 @@ import (
 type RepositoryReconciler struct {
 	client.Client
 	Scheme              *runtime.Scheme
-	GitHubClientManager *kubernetes.GitHubClientManager
+	GitHubClientManager kubernetes.GitHubClientManagerInterface
 }
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch;create;update;patch;delete

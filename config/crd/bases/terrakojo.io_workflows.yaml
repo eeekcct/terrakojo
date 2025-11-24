@@ -54,6 +54,8 @@ spec:
           status:
             description: status defines the observed state of Workflow
             properties:
+              checkRunID:
+                type: integer
               conditions:
                 description: |-
                   conditions represent the current state of the Workflow resource.
@@ -124,6 +126,8 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               jobs:
+                description: Jobs contains the list of Job names created for this
+                  workflow
                 items:
                   type: string
                 type: array
