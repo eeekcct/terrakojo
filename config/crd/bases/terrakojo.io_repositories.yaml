@@ -41,6 +41,21 @@ spec:
             properties:
               defaultBranch:
                 type: string
+              githubSecretRef:
+                description: |-
+                  GitHubSecretRef references a secret containing GitHub authentication credentials.
+                  This field is required to ensure proper authentication for GitHub operations.
+                properties:
+                  name:
+                    description: Name of the secret containing GitHub credentials
+                    type: string
+                  namespace:
+                    description: Namespace of the secret. If empty, uses the same
+                      namespace as Repository
+                    type: string
+                required:
+                - name
+                type: object
               name:
                 type: string
               owner:
@@ -49,6 +64,7 @@ spec:
                 type: string
             required:
             - defaultBranch
+            - githubSecretRef
             - name
             - owner
             - type

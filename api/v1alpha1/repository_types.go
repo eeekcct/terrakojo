@@ -38,6 +38,17 @@ type BranchInfo struct {
 	SHA string `json:"sha,omitempty"`
 }
 
+// GitHubSecretRef references a Secret containing GitHub credentials
+type GitHubSecretRef struct {
+	// Name of the secret containing GitHub credentials
+	// +required
+	Name string `json:"name"`
+
+	// Namespace of the secret. If empty, uses the same namespace as Repository
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
 // RepositorySpec defines the desired state of Repository
 type RepositorySpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -56,6 +67,11 @@ type RepositorySpec struct {
 
 	// +required
 	DefaultBranch string `json:"defaultBranch"`
+
+	// GitHubSecretRef references a secret containing GitHub authentication credentials.
+	// This field is required to ensure proper authentication for GitHub operations.
+	// +required
+	GitHubSecretRef GitHubSecretRef `json:"githubSecretRef"`
 }
 
 // RepositoryStatus defines the observed state of Repository.

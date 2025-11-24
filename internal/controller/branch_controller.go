@@ -30,19 +30,22 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
-	"github.com/eeekcct/terrakojo/internal/config"
 	"github.com/eeekcct/terrakojo/internal/github"
+	"github.com/eeekcct/terrakojo/internal/kubernetes"
 )
 
 // BranchReconciler reconciles a Branch object
 type BranchReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme              *runtime.Scheme
+	GitHubClientManager *kubernetes.GitHubClientManager
 }
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflowtemplates,verbs=get;list;watch
 
@@ -69,14 +72,48 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	config := config.LoadConfig()
-	ghClient, err := github.NewClient(ctx, config)
+	// Get GitHub client using manager (required)
+	if r.GitHubClientManager == nil {
+		log.Error(nil, "GitHubClientManager not initialized")
+		return ctrl.Result{}, fmt.Errorf("GitHubClientManager not initialized")
+	}
+
+	ghClient, err := r.GitHubClientManager.GetClientForBranch(ctx, &branch)
 	if err != nil {
-		log.Error(err, "unable to create GitHub client")
+		log.Error(err, "Failed to create GitHub client for branch",
+			"branch", branch.Name,
+			"owner", branch.Spec.Owner,
+			"repository", branch.Spec.Repository)
 		return ctrl.Result{}, err
 	}
 
-	changedFiles, err := ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
+	// Cast to ClientInterface for API calls
+	var clientInterface github.ClientInterface = ghClient
+
+	// Get branch information from GitHub and update status
+	githubBranch, err := clientInterface.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
+	if err != nil {
+		log.Error(err, "unable to get branch info from GitHub")
+		r.setCondition(&branch, "BranchInfoFailed", metav1.ConditionFalse, "GitHubApiFailed", fmt.Sprintf("Failed to get branch info: %v", err))
+		if statusErr := r.Status().Update(ctx, &branch); statusErr != nil {
+			log.Error(statusErr, "unable to update Branch status after GitHub API failure")
+		}
+		return ctrl.Result{RequeueAfter: time.Minute * 5}, nil // Retry after 5 minutes
+	}
+
+	// Update branch SHA in status if it has changed
+	if githubBranch.Commit != nil && githubBranch.Commit.SHA != nil {
+		currentSHA := *githubBranch.Commit.SHA
+		if branch.Status.SHA != currentSHA {
+			branch.Status.SHA = currentSHA
+			log.Info("Branch SHA updated", "branch", branch.Name, "sha", currentSHA)
+		}
+	}
+
+	// Set condition to indicate branch info was retrieved successfully
+	r.setCondition(&branch, "BranchInfoReady", metav1.ConditionTrue, "BranchInfoRetrieved", "Branch information retrieved successfully from GitHub")
+
+	changedFiles, err := clientInterface.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
 	if err != nil {
 		log.Error(err, "unable to get changed files from GitHub")
 		return ctrl.Result{}, err

@@ -9,7 +9,7 @@ spec:
   displayName: "Sample WorkflowTemplate"
   match:
     paths:
-      - "src/**"
+      - "**/*.tf"
   steps:
     - name: "Build Step"
       image: "busybox:latest"

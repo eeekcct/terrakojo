@@ -41,18 +41,22 @@ spec:
             properties:
               name:
                 type: string
+              owner:
+                type: string
               prNumber:
                 maximum: 99999999
                 minimum: 1
                 type: integer
-              repositoryRef:
+              repository:
                 type: string
               sha:
                 pattern: ^[a-f0-9]{40}$
                 type: string
             required:
             - name
-            - repositoryRef
+            - owner
+            - repository
+            - sha
             type: object
           status:
             description: status defines the observed state of Branch

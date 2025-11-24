@@ -28,17 +28,20 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
+	"github.com/eeekcct/terrakojo/internal/kubernetes"
 )
 
 // RepositoryReconciler reconciles a Repository object
 type RepositoryReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme              *runtime.Scheme
+	GitHubClientManager *kubernetes.GitHubClientManager
 }
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -64,10 +67,28 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// Test GitHub authentication if manager is available
+	if r.GitHubClientManager == nil {
+		log.Error(nil, "GitHubClientManager not initialized")
+		return ctrl.Result{}, fmt.Errorf("GitHubClientManager not initialized")
+	}
+
+	ghClient, err := r.GitHubClientManager.GetClientForRepository(ctx, &repo)
+	if err != nil {
+		log.Error(err, "Failed to create GitHub client for repository")
+		return ctrl.Result{}, err
+	} else {
+		log.Info("Successfully created GitHub client for repository",
+			"repository", repo.Name,
+			"owner", repo.Spec.Owner,
+			"secretName", repo.Spec.GitHubSecretRef.Name)
+		// Store client for potential later use
+		_ = ghClient
+	}
+
 	// Get existing Branch resources owned by this Repository
 	var branchList terrakojoiov1alpha1.BranchList
-	err := r.List(ctx, &branchList, client.InNamespace(req.Namespace))
-	if err != nil {
+	if err := r.List(ctx, &branchList, client.InNamespace(req.Namespace)); err != nil {
 		log.Error(err, "Failed to list Branch resources")
 		return ctrl.Result{}, err
 	}
@@ -136,20 +157,16 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojoiov1alpha1.Repository, existingBranches map[string]terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// Convert BranchRefs to map for easier lookup
+	// 1. Create Branch resources for BranchRefs that don't exist
 	branchRefsMap := make(map[string]bool)
 	for _, branch := range repo.Status.BranchList {
 		branchRefsMap[branch.Ref] = true
-	}
-
-	// 1. Create Branch resources for BranchRefs that don't exist
-	for branchRef := range branchRefsMap {
-		if _, exists := existingBranches[branchRef]; !exists {
-			if err := r.createBranchResource(ctx, repo, branchRef); err != nil {
-				log.Error(err, "Failed to create Branch resource", "branch", branchRef)
+		if _, exists := existingBranches[branch.Ref]; !exists {
+			if err := r.createBranchResource(ctx, repo, branch); err != nil {
+				log.Error(err, "Failed to create Branch resource", "branch", branch.Ref)
 				return err
 			}
-			log.Info("Created Branch resource", "branch", branchRef, "namespace", repo.Namespace)
+			log.Info("Created Branch resource", "branch", branch.Ref, "namespace", repo.Namespace)
 		}
 	}
 
@@ -168,25 +185,27 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 }
 
 // createBranchResource creates a new Branch resource
-func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchName string) error {
-	branch := &terrakojoiov1alpha1.Branch{
+func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branch terrakojoiov1alpha1.BranchInfo) error {
+	newBranch := &terrakojoiov1alpha1.Branch{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", repo.Spec.Name, branchName),
+			Name:      fmt.Sprintf("%s-%s", repo.Spec.Name, branch.Ref),
 			Namespace: repo.Namespace,
 		},
 		Spec: terrakojoiov1alpha1.BranchSpec{
 			Owner:      repo.Spec.Owner,
 			Repository: repo.Spec.Name,
-			Name:       branchName,
+			Name:       branch.Ref,
+			PRNumber:   branch.PRNumber,
+			SHA:        branch.SHA,
 		},
 	}
 
 	// Set Repository as the owner of the Branch
-	if err := controllerutil.SetControllerReference(repo, branch, r.Scheme); err != nil {
+	if err := controllerutil.SetControllerReference(repo, newBranch, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set controller reference: %w", err)
 	}
 
-	return r.Create(ctx, branch)
+	return r.Create(ctx, newBranch)
 }
 
 // isOwnedByRepository checks if a Branch is owned by the given Repository

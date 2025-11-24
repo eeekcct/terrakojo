@@ -37,6 +37,7 @@ import (
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	"github.com/eeekcct/terrakojo/internal/controller"
+	"github.com/eeekcct/terrakojo/internal/kubernetes"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -178,16 +179,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create GitHub client manager for repository-specific authentication
+	githubClientManager := kubernetes.NewGitHubClientManager(mgr.GetClient())
+
 	if err := (&controller.RepositoryReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		GitHubClientManager: githubClientManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Repository")
 		os.Exit(1)
 	}
 	if err := (&controller.BranchReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		GitHubClientManager: githubClientManager,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Branch")
 		os.Exit(1)

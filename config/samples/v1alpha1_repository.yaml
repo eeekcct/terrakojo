@@ -9,4 +9,6 @@ spec:
   owner: "eeekcct"
   name: "terrakojo"
   type: "github"
-  defaultBranch: "main" 
+  defaultBranch: "main"
+  githubSecretRef:
+    name: "github-secrets"
