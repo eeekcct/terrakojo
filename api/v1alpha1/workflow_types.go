@@ -30,9 +30,14 @@ type WorkflowSpec struct {
 	// The following markers will use OpenAPI v3 schema to validate the value
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
+	// +required
 	BranchRef string `json:"branchRef"`
 
+	// +required
 	Template string `json:"template"`
+
+	// +optional
+	Path string `json:"path,omitempty"`
 
 	// +optional
 	Parameters map[string]string `json:"parameters,omitempty"`
@@ -64,6 +69,8 @@ type WorkflowStatus struct {
 	// +optional
 	Jobs []string `json:"jobs,omitempty"`
 
+	// +kubebuilder:validation:Type=integer
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	CheckRunID int `json:"checkRunID,omitempty"`
 }

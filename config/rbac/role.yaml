@@ -29,7 +29,6 @@ rules:
   resources:
   - branches
   - repositories
-  - workflows
   verbs:
   - create
   - delete
@@ -56,6 +55,19 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - terrakojo.io
+  resources:
+  - workflows
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - terrakojo.io
   resources:

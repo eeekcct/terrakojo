@@ -45,6 +45,8 @@ spec:
                 additionalProperties:
                   type: string
                 type: object
+              path:
+                type: string
               template:
                 type: string
             required:
@@ -55,6 +57,7 @@ spec:
             description: status defines the observed state of Workflow
             properties:
               checkRunID:
+                minimum: 0
                 type: integer
               conditions:
                 description: |-

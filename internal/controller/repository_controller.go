@@ -62,9 +62,15 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Ensure required labels are present
-	if err := r.ensureLabels(ctx, &repo); err != nil {
+	labelsUpdated, err := r.ensureLabels(ctx, &repo)
+	if err != nil {
 		log.Error(err, "Failed to ensure labels")
 		return ctrl.Result{}, err
+	}
+
+	// If labels were updated, end this reconcile and let the next one handle the business logic
+	if labelsUpdated {
+		return ctrl.Result{}, nil
 	}
 
 	// Test GitHub authentication if manager is available
@@ -112,7 +118,8 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 // ensureLabels ensures that the Repository has the required labels for efficient querying
-func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
+// Returns true if labels were updated (indicating reconcile should end)
+func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (bool, error) {
 	log := logf.FromContext(ctx)
 
 	if repo.Labels == nil {
@@ -146,39 +153,65 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 	if needsUpdate {
 		log.Info("Updating Repository labels", "name", repo.Name, "namespace", repo.Namespace)
 		if err := r.Update(ctx, repo); err != nil {
-			return fmt.Errorf("failed to update Repository labels: %w", err)
+			return false, fmt.Errorf("failed to update Repository labels: %w", err)
+		}
+		return true, nil // Labels were updated, end this reconcile
+	}
+
+	return false, nil // No update needed, continue with reconcile
+}
+
+// syncBranches synchronizes BranchRefs in Repository status with actual Branch resources
+func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string]terrakojoiov1alpha1.Branch) error {
+	log := logf.FromContext(ctx)
+
+	// Build a set of processed branches to track deletions
+	desired := make(map[string]bool)
+
+	// Process desired branches (create or update)
+	for _, branchInfo := range repo.Status.BranchList {
+		desired[branchInfo.Ref] = true
+		branch, exists := branches[branchInfo.Ref]
+		if err := r.ensureBranchResource(ctx, repo, branchInfo, branch, exists); err != nil {
+			return err
+		}
+	}
+
+	// Delete branches that are no longer desired
+	for branchName, branch := range branches {
+		if !desired[branchName] {
+			if err := r.Delete(ctx, &branch); err != nil {
+				return err
+			}
+			log.Info("Deleted Branch resource", "branch", branchName, "namespace", repo.Namespace)
 		}
 	}
 
 	return nil
 }
 
-// syncBranches synchronizes BranchRefs in Repository status with actual Branch resources
-func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojoiov1alpha1.Repository, existingBranches map[string]terrakojoiov1alpha1.Branch) error {
+// ensureBranchResource creates or updates a Branch resource as needed
+func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchInfo terrakojoiov1alpha1.BranchInfo, branch terrakojoiov1alpha1.Branch, exists bool) error {
 	log := logf.FromContext(ctx)
 
-	// 1. Create Branch resources for BranchRefs that don't exist
-	branchRefsMap := make(map[string]bool)
-	for _, branch := range repo.Status.BranchList {
-		branchRefsMap[branch.Ref] = true
-		if _, exists := existingBranches[branch.Ref]; !exists {
-			if err := r.createBranchResource(ctx, repo, branch); err != nil {
-				log.Error(err, "Failed to create Branch resource", "branch", branch.Ref)
-				return err
-			}
-			log.Info("Created Branch resource", "branch", branch.Ref, "namespace", repo.Namespace)
+	if !exists {
+		// Branch doesn't exist, create it
+		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
+			return fmt.Errorf("failed to create branch: %w", err)
 		}
+		log.Info("Created Branch resource", "branch", branchInfo.Ref, "namespace", repo.Namespace)
+		return nil
 	}
 
-	// 2. Delete Branch resources that are not in BranchRefs
-	for branchName, branch := range existingBranches {
-		if !branchRefsMap[branchName] {
-			if err := r.Delete(ctx, &branch); err != nil {
-				log.Error(err, "Failed to delete Branch resource", "branch", branchName)
-				return err
-			}
-			log.Info("Deleted Branch resource", "branch", branchName, "namespace", repo.Namespace)
+	// Branch exists, check if update is needed
+	if r.needsBranchUpdate(&branch, branchInfo) {
+		if err := r.updateBranchResource(ctx, &branch, branchInfo); err != nil {
+			return fmt.Errorf("failed to update branch: %w", err)
 		}
+		log.Info("Updated Branch resource",
+			"branch", branchInfo.Ref,
+			"newSHA", branchInfo.SHA,
+			"oldSHA", branch.Spec.SHA)
 	}
 
 	return nil
@@ -208,6 +241,19 @@ func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *t
 	return r.Create(ctx, newBranch)
 }
 
+// needsBranchUpdate checks if a Branch resource needs to be updated
+func (r *RepositoryReconciler) needsBranchUpdate(branch *terrakojoiov1alpha1.Branch, branchInfo terrakojoiov1alpha1.BranchInfo) bool {
+	return branch.Spec.SHA != branchInfo.SHA
+}
+
+// updateBranchResource updates an existing Branch resource
+func (r *RepositoryReconciler) updateBranchResource(ctx context.Context, barnch *terrakojoiov1alpha1.Branch, branchInfo terrakojoiov1alpha1.BranchInfo) error {
+	barnch.Spec.Name = branchInfo.Ref
+	barnch.Spec.SHA = branchInfo.SHA
+	barnch.Spec.PRNumber = branchInfo.PRNumber
+	return r.Update(ctx, barnch)
+}
+
 // isOwnedByRepository checks if a Branch is owned by the given Repository
 func (r *RepositoryReconciler) isOwnedByRepository(branch *terrakojoiov1alpha1.Branch, repo *terrakojoiov1alpha1.Repository) bool {
 	for _, ownerRef := range branch.GetOwnerReferences() {
@@ -222,7 +268,7 @@ func (r *RepositoryReconciler) isOwnedByRepository(branch *terrakojoiov1alpha1.B
 func (r *RepositoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&terrakojoiov1alpha1.Repository{}).
-		Owns(&terrakojoiov1alpha1.Branch{}).
+		// Owns(&terrakojoiov1alpha1.Branch{}).
 		Named("repository").
 		Complete(r)
 }

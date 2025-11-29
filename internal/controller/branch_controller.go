@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"path"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -48,6 +50,8 @@ type BranchReconciler struct {
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflowtemplates,verbs=get;list;watch
 
+// +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete;deletecollection
+
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
@@ -71,6 +75,21 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
+	// If SHA has changed, delete all existing workflows for this branch
+	if lastSHA != "" && lastSHA != branch.Spec.SHA {
+		if err := r.deleteWorkflowsForBranch(ctx, &branch); err != nil {
+			log.Error(err, "Failed to delete existing workflows for branch",
+				"branch", branch.Name,
+				"oldSHA", lastSHA,
+				"newSHA", branch.Spec.SHA)
+			return ctrl.Result{}, err
+		}
+		log.Info("Deleted existing workflows for branch due to SHA change",
+			"branch", branch.Name,
+			"oldSHA", lastSHA,
+			"newSHA", branch.Spec.SHA)
+	}
+
 	// Get GitHub client using manager (required)
 	if r.GitHubClientManager == nil {
 		log.Error(nil, "GitHubClientManager not initialized")
@@ -86,28 +105,28 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Get branch information from GitHub and update status
-	githubBranch, err := ghClient.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
-	if err != nil {
-		log.Error(err, "unable to get branch info from GitHub")
-		r.setCondition(&branch, "BranchInfoFailed", metav1.ConditionFalse, "GitHubApiFailed", fmt.Sprintf("Failed to get branch info: %v", err))
-		if statusErr := r.Status().Update(ctx, &branch); statusErr != nil {
-			log.Error(statusErr, "unable to update Branch status after GitHub API failure")
-		}
-		return ctrl.Result{RequeueAfter: time.Minute * 5}, nil // Retry after 5 minutes
-	}
+	// // Get branch information from GitHub and update status
+	// githubBranch, err := ghClient.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
+	// if err != nil {
+	// 	log.Error(err, "unable to get branch info from GitHub")
+	// 	r.setCondition(&branch, "BranchInfoFailed", metav1.ConditionFalse, "GitHubApiFailed", fmt.Sprintf("Failed to get branch info: %v", err))
+	// 	if statusErr := r.Status().Update(ctx, &branch); statusErr != nil {
+	// 		log.Error(statusErr, "unable to update Branch status after GitHub API failure")
+	// 	}
+	// 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil // Retry after 5 minutes
+	// }
 
-	// Update branch SHA in status if it has changed
-	if githubBranch.Commit != nil && githubBranch.Commit.SHA != nil {
-		currentSHA := *githubBranch.Commit.SHA
-		if branch.Spec.SHA != currentSHA {
-			branch.Spec.SHA = currentSHA
-			log.Info("Branch SHA updated", "branch", branch.Name, "sha", currentSHA)
-		}
-	}
+	// // Update branch SHA in status if it has changed
+	// if githubBranch.Commit != nil && githubBranch.Commit.SHA != nil {
+	// 	currentSHA := *githubBranch.Commit.SHA
+	// 	if branch.Spec.SHA != currentSHA {
+	// 		branch.Spec.SHA = currentSHA
+	// 		log.Info("Branch SHA updated", "branch", branch.Name, "sha", currentSHA)
+	// 	}
+	// }
 
-	// Set condition to indicate branch info was retrieved successfully
-	r.setCondition(&branch, "BranchInfoReady", metav1.ConditionTrue, "BranchInfoRetrieved", "Branch information retrieved successfully from GitHub")
+	// // Set condition to indicate branch info was retrieved successfully
+	// r.setCondition(&branch, "BranchInfoReady", metav1.ConditionTrue, "BranchInfoRetrieved", "Branch information retrieved successfully from GitHub")
 
 	changedFiles, err := ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
 	if err != nil {
@@ -119,7 +138,9 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	var templates terrakojoiov1alpha1.WorkflowTemplateList
-	if err := r.List(ctx, &templates); err != nil {
+	if err := r.List(ctx, &templates, &client.ListOptions{
+		Namespace: branch.Namespace,
+	}); err != nil {
 		log.Error(err, "unable to list WorkflowTemplates")
 		r.setCondition(
 			&branch,
@@ -134,65 +155,56 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	matched := &terrakojoiov1alpha1.WorkflowTemplate{}
-	for _, t := range templates.Items {
-		if matchTemplate(t.Spec.Match, changedFiles) {
-			matched = &t
-			break
-		}
-	}
-
-	if matched.Name == "" {
+	groups := matchTemplates(templates, changedFiles)
+	if len(groups) == 0 {
 		log.Info("No matching WorkflowTemplate found for Branch", "branch", branch.Name, "namespace", branch.Namespace, "changedFiles", changedFiles)
 		return ctrl.Result{}, nil
 	}
 
-	wfName := fmt.Sprintf("%s-workflow", branch.Name)
-	if err := r.Get(ctx, client.ObjectKey{Name: wfName, Namespace: branch.Namespace}, &terrakojoiov1alpha1.Workflow{}); err == nil {
-		// Workflow already exists, nothing to do
-		return ctrl.Result{}, nil
+	workflowNames := []string{}
+	for templateName, files := range groups {
+		folders := splitFolderLevel(files)
+		if len(folders) == 0 {
+			continue
+		}
+		for _, folder := range folders {
+			// Generate random workflow name
+			randomSuffix, err := generateRandomString(8)
+			if err != nil {
+				log.Error(err, "Failed to generate random string for workflow name")
+				return ctrl.Result{}, err
+			}
+			wfName := fmt.Sprintf("%s-%s-%s", branch.Name, templateName, randomSuffix)
+
+			if err := r.Get(ctx, client.ObjectKey{Name: wfName, Namespace: branch.Namespace}, &terrakojoiov1alpha1.Workflow{}); err == nil {
+				// Workflow already exists, nothing to do
+				return ctrl.Result{}, nil
+			}
+
+			if err := r.createWorkflowForBranch(ctx, &branch, templateName, wfName, folder); err != nil {
+				log.Error(err, "Failed to create Workflow for Branch", "branch", branch.Name, "namespace", branch.Namespace)
+				return ctrl.Result{}, err
+			}
+			workflowNames = append(workflowNames, wfName)
+		}
 	}
 
-	// Create a new Workflow for this Branch
-	workflow := &terrakojoiov1alpha1.Workflow{
-		ObjectMeta: ctrl.ObjectMeta{
-			Name:      wfName,
-			Namespace: branch.Namespace,
-		},
-		Spec: terrakojoiov1alpha1.WorkflowSpec{
-			BranchRef: branch.Name,
-			Template:  matched.Name, // This could be dynamic based on branch or other criteria
-		},
-	}
-	if err := controllerutil.SetControllerReference(&branch, workflow, r.Scheme); err != nil {
-		return ctrl.Result{}, err
-	}
+	log.Info("Created Workflow for Branch", "branch", branch.Name, "namespace", branch.Namespace, "sha", branch.Spec.SHA)
 
-	if err := r.Create(ctx, workflow); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	log.Info("Created Workflow for Branch", "workflow", wfName, "branch", branch.Name, "namespace", branch.Namespace)
-
-	// update Branch status to reflect the created Workflow
-	branch.Status.Workflows = append(branch.Status.Workflows, wfName)
+	branch.Status.Workflows = workflowNames
 	branch.Status.ChangedFiles = changedFiles
 
-	// Set condition to indicate workflow was created successfully
-	r.setCondition(&branch, "WorkflowReady", metav1.ConditionTrue, "WorkflowCreated", fmt.Sprintf("Workflow %s created successfully", wfName))
+	r.setCondition(&branch, "WorkflowReady", metav1.ConditionTrue, "WorkflowCreated", fmt.Sprintf("Workflow created successfully for SHA %s", branch.Spec.SHA))
 
 	// Update annotation with the current SHA before status update
 	if branch.Annotations == nil {
 		branch.Annotations = make(map[string]string)
 	}
 	branch.Annotations["terrakojo.io/last-sha"] = branch.Spec.SHA
-
-	// Update the Branch resource first to persist annotation changes
 	if err := r.Update(ctx, &branch); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Then update status
 	if err := r.Status().Update(ctx, &branch); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -240,13 +252,122 @@ func (r *BranchReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func matchTemplate(match terrakojoiov1alpha1.WorkflowMatch, changedFiles []string) bool {
-	for _, pattern := range match.Paths {
-		for _, file := range changedFiles {
-			if matched, _ := doublestar.Match(pattern, file); matched {
-				return true
+func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch, templateName, workflowName, path string) error {
+	workflow := &terrakojoiov1alpha1.Workflow{
+		ObjectMeta: ctrl.ObjectMeta{
+			Name:      workflowName,
+			Namespace: branch.Namespace,
+			Labels: map[string]string{
+				"terrakojo.io/owner-uid": string(branch.UID),
+			},
+		},
+		Spec: terrakojoiov1alpha1.WorkflowSpec{
+			BranchRef: branch.Name,
+			Template:  templateName,
+			Path:      path,
+		},
+	}
+	if err := controllerutil.SetControllerReference(branch, workflow, r.Scheme); err != nil {
+		return err
+	}
+
+	return r.Create(ctx, workflow)
+}
+
+func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
+	log := logf.FromContext(ctx)
+
+	// Use DeleteAllOf with MatchingLabels for owner-uid
+	if err := r.DeleteAllOf(ctx, &terrakojoiov1alpha1.Workflow{},
+		client.InNamespace(branch.Namespace),
+		client.MatchingLabels{"terrakojo.io/owner-uid": string(branch.UID)},
+	); err != nil {
+		log.Info("DeleteAllOf with MatchingLabels failed, falling back to list and delete", "error", err)
+		return r.deleteWorkflowsForBranchFallback(ctx, branch)
+	}
+
+	branch.Status.Workflows = []string{}
+	return nil
+}
+
+func (r *BranchReconciler) deleteWorkflowsForBranchFallback(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
+	log := logf.FromContext(ctx)
+
+	// List all workflows in the namespace
+	var workflows terrakojoiov1alpha1.WorkflowList
+	if err := r.List(ctx, &workflows, &client.ListOptions{
+		Namespace: branch.Namespace,
+	}); err != nil {
+		return err
+	}
+
+	// Delete workflows owned by this branch
+	for _, workflow := range workflows.Items {
+		for _, ownerRef := range workflow.GetOwnerReferences() {
+			if ownerRef.UID == branch.UID && ownerRef.Kind == "Branch" {
+				if err := r.Delete(ctx, &workflow); err != nil {
+					if client.IgnoreNotFound(err) != nil {
+						log.Error(err, "Failed to delete workflow", "workflow", workflow.Name)
+						return err
+					}
+				}
+				break
 			}
 		}
 	}
-	return false
+
+	branch.Status.Workflows = []string{}
+	return nil
+}
+
+func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedFiles []string) map[string][]string {
+	groups := map[string][]string{}
+	for _, t := range templates.Items {
+		files := matchTemplate(t.Spec.Match, changedFiles)
+		if len(files) > 0 {
+			groups[t.Name] = files
+		}
+	}
+	return groups
+}
+
+func matchTemplate(match terrakojoiov1alpha1.WorkflowMatch, changedFiles []string) []string {
+	matchedFiles := []string{}
+	for _, file := range changedFiles {
+		for _, pattern := range match.Paths {
+			if matched, _ := doublestar.Match(pattern, file); matched {
+				matchedFiles = append(matchedFiles, file)
+				break
+			}
+		}
+	}
+	return matchedFiles
+}
+
+func splitFolderLevel(files []string) []string {
+	folders := []string{}
+	folderSet := make(map[string]struct{})
+	for _, file := range files {
+		dir := path.Dir(file)
+		if dir != "." && dir != "" {
+			folderSet[dir] = struct{}{}
+		}
+	}
+	for folder := range folderSet {
+		folders = append(folders, folder)
+	}
+	return folders
+}
+
+// generateRandomString generates a random string of specified length
+func generateRandomString(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = charset[b[i]%byte(len(charset))]
+	}
+	return string(b), nil
 }

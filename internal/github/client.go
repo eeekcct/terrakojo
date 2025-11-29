@@ -32,7 +32,7 @@ type ClientInterface interface {
 	GetChangedFiles(owner, repo string, prNumber int) ([]string, error)
 	GetBranch(owner, repo, branchName string) (*github.Branch, error)
 	CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error)
-	UpdateCheckRun(owner, repo string, checkRunID int64, status, conclusion string) error
+	UpdateCheckRun(owner, repo string, checkRunID int64, name, status, conclusion string) error
 }
 
 type Client struct {
@@ -124,13 +124,18 @@ func (c *Client) CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun
 		Name:    name,
 		HeadSHA: sha,
 		Status:  github.Ptr("queued"),
+		Output: &github.CheckRunOutput{
+			Title:   github.Ptr(name),
+			Summary: github.Ptr("Check run created and queued."),
+		},
 	})
 	return checkRun, err
 }
 
 // UpdateCheckRun updates a check run status and conclusion
-func (c *Client) UpdateCheckRun(owner, repo string, checkRunID int64, status, conclusion string) error {
+func (c *Client) UpdateCheckRun(owner, repo string, checkRunID int64, name, status, conclusion string) error {
 	updateOptions := github.UpdateCheckRunOptions{
+		Name:   name,
 		Status: &status,
 	}
 
