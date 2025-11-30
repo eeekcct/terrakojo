@@ -33,6 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
+	"github.com/eeekcct/terrakojo/internal/github"
 	"github.com/eeekcct/terrakojo/internal/kubernetes"
 )
 
@@ -54,6 +55,8 @@ const (
 
 	// WorkflowPhaseCancelled indicates the workflow was cancelled
 	WorkflowPhaseCancelled WorkflowPhase = "Cancelled"
+
+	workflowFinalizer = "terrakojo.io/cleanup-checkrun"
 )
 
 // WorkflowReconciler reconciles a Workflow object
@@ -86,16 +89,22 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	var template terrakojoiov1alpha1.WorkflowTemplate
-	if err := r.Get(ctx, client.ObjectKey{Name: workflow.Spec.Template, Namespace: workflow.Namespace}, &template); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
+	jobName := fmt.Sprintf("%s-job", workflow.Name)
+	owner := workflow.Spec.Owner
+	repo := workflow.Spec.Repository
+	branchRef := workflow.Spec.Branch
+	sha := workflow.Spec.SHA
+	checkRunName := workflow.Status.CheckRunName
+	checkRunID := int64(workflow.Status.CheckRunID)
 
 	var branch terrakojoiov1alpha1.Branch
-	if err := r.Get(ctx, client.ObjectKey{Name: workflow.Spec.BranchRef, Namespace: workflow.Namespace}, &branch); err != nil {
-		log.Error(err, "Failed to get Branch for Workflow",
+	if err := r.Get(ctx, client.ObjectKey{Name: branchRef, Namespace: workflow.Namespace}, &branch); err != nil {
+		log.Error(err, "Failed to get branch for Workflow",
 			"workflow", workflow.Name,
-			"branchRef", workflow.Spec.BranchRef)
+			"owner", owner,
+			"repository", repo,
+			"branch", branchRef,
+		)
 		return ctrl.Result{}, err
 	}
 
@@ -107,14 +116,38 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err != nil {
 		log.Error(err, "Failed to create GitHub client for workflow",
 			"workflow", workflow.Name,
-			"branch", branch.Name,
-			"owner", branch.Spec.Owner,
-			"repository", branch.Spec.Repository)
+			"owner", owner,
+			"repository", repo,
+		)
 		return ctrl.Result{}, err
 	}
 
-	checkRunName := fmt.Sprintf("terrakojo(%s)", workflow.Spec.Path)
-	jobName := fmt.Sprintf("%s-job", workflow.Name)
+	// Handle deletion first so we can finalize and report cancellation
+	if !workflow.ObjectMeta.DeletionTimestamp.IsZero() {
+		if !controllerutil.ContainsFinalizer(&workflow, workflowFinalizer) {
+			return ctrl.Result{}, nil
+		}
+		if err := r.handleWorkflowDeletion(ctx, ghClient, &workflow, jobName); err != nil {
+			log.Error(err, "Failed to handle workflow deletion",
+				"workflow", workflow.Name)
+			return ctrl.Result{}, err
+		}
+		controllerutil.RemoveFinalizer(&workflow, workflowFinalizer)
+		if err := r.Update(ctx, &workflow); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Ensure finalizer is set so we can cancel CheckRun on deletion
+	if !controllerutil.ContainsFinalizer(&workflow, workflowFinalizer) {
+		controllerutil.AddFinalizer(&workflow, workflowFinalizer)
+		if err := r.Update(ctx, &workflow); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	var job batchv1.Job
 	err = r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job)
 	if err != nil && client.IgnoreNotFound(err) != nil {
@@ -127,35 +160,50 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{}, err
 		}
 		status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
-		err = ghClient.UpdateCheckRun(branch.Spec.Owner, branch.Spec.Repository, int64(workflow.Status.CheckRunID), checkRunName, status, conclusion)
+		err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 	}
 
+	var template terrakojoiov1alpha1.WorkflowTemplate
+	if err := r.Get(ctx, client.ObjectKey{Name: workflow.Spec.Template, Namespace: workflow.Namespace}, &template); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	checkRunName = fmt.Sprintf("%s(%s)", template.Spec.DisplayName, workflow.Spec.Path)
+	workflow.Status.CheckRunName = checkRunName
+
 	// Create CheckRun
-	checkRun, err := ghClient.CreateCheckRun(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.SHA, checkRunName)
+	checkRun, err := ghClient.CreateCheckRun(owner, repo, sha, checkRunName)
 	if err != nil {
 		log.Error(err, "Failed to create GitHub CheckRun for workflow",
 			"workflow", workflow.Name,
-			"branch", branch.Name,
-			"owner", branch.Spec.Owner,
-			"repository", branch.Spec.Repository)
+			"owner", owner,
+			"repository", repo,
+			"branch", branchRef,
+		)
 		return ctrl.Result{}, err
 	}
-	workflow.Status.CheckRunID = int(checkRun.GetID())
+	checkRunID = checkRun.GetID()
+	workflow.Status.CheckRunID = int(checkRunID)
 	if err := r.Status().Update(ctx, &workflow); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// Workflow was deleted, ignore this reconcile
 			log.Info("Workflow was deleted during reconcile, ignoring",
 				"workflow", workflow.Name,
-				"checkRunID", workflow.Status.CheckRunID)
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"checkRunID", checkRunID)
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Failed to update Workflow status with CheckRunID",
 			"workflow", workflow.Name,
-			"checkRunID", workflow.Status.CheckRunID)
+			"owner", owner,
+			"repository", repo,
+			"branch", branchRef,
+			"checkRunID", checkRunID)
 		return ctrl.Result{}, err
 	}
 
@@ -170,7 +218,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	log.Info("Created Job for Workflow", "jobName", job.Name, "workflowName", workflow.Name, "namespace", workflow.Namespace)
+	log.Info("Created Job for Workflow", "jobName", job.Name, "workflow", workflow.Name, "namespace", workflow.Namespace)
 
 	workflow.Status.Jobs = append(workflow.Status.Jobs, job.Name)
 	phase, err := r.updateWorkflowStatus(ctx, &workflow, &job)
@@ -178,12 +226,51 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
-	err = ghClient.UpdateCheckRun(branch.Spec.Owner, branch.Spec.Repository, int64(workflow.Status.CheckRunID), checkRunName, status, conclusion)
+	err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *WorkflowReconciler) handleWorkflowDeletion(ctx context.Context, ghClient github.ClientInterface, workflow *terrakojoiov1alpha1.Workflow, jobName string) error {
+	log := logf.FromContext(ctx)
+
+	if workflow.Status.CheckRunID == 0 {
+		// No CheckRun to cancel
+		return nil
+	}
+
+	completed := false
+	var job batchv1.Job
+	if err := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job); err == nil {
+		if job.Status.Succeeded > 0 || job.Status.Failed > 0 {
+			completed = true
+		}
+	} else if client.IgnoreNotFound(err) != nil {
+		return err
+	} else {
+		// Job not found, consider it completed
+		completed = true
+	}
+
+	if completed {
+		return nil
+	}
+
+	owner := workflow.Spec.Owner
+	repo := workflow.Spec.Repository
+	checkRunID := int64(workflow.Status.CheckRunID)
+	checkRunName := workflow.Status.CheckRunName
+
+	status, conclusion := r.checkRunStatus(ctx, workflow, WorkflowPhaseCancelled)
+	if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion); err != nil {
+		return err
+	}
+
+	log.Info("Cancelled GitHub CheckRun before workflow deletion", "workflow", workflow.Name, "checkRunID", checkRunID)
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

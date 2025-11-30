@@ -31,7 +31,16 @@ type WorkflowSpec struct {
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
 	// +required
-	BranchRef string `json:"branchRef"`
+	Owner string `json:"owner,omitempty"`
+
+	// +required
+	Repository string `json:"repository,omitempty"`
+
+	// +required
+	Branch string `json:"branch"`
+
+	// +required
+	SHA string `json:"sha,omitempty"`
 
 	// +required
 	Template string `json:"template"`
@@ -73,6 +82,9 @@ type WorkflowStatus struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	CheckRunID int `json:"checkRunID,omitempty"`
+
+	// +optional
+	CheckRunName string `json:"checkRunName,omitempty"`
 }
 
 // +kubebuilder:object:root=true

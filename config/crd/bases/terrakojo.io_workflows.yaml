@@ -39,7 +39,9 @@ spec:
           spec:
             description: spec defines the desired state of Workflow
             properties:
-              branchRef:
+              branch:
+                type: string
+              owner:
                 type: string
               parameters:
                 additionalProperties:
@@ -47,10 +49,17 @@ spec:
                 type: object
               path:
                 type: string
+              repository:
+                type: string
+              sha:
+                type: string
               template:
                 type: string
             required:
-            - branchRef
+            - branch
+            - owner
+            - repository
+            - sha
             - template
             type: object
           status:
@@ -59,6 +68,8 @@ spec:
               checkRunID:
                 minimum: 0
                 type: integer
+              checkRunName:
+                type: string
               conditions:
                 description: |-
                   conditions represent the current state of the Workflow resource.

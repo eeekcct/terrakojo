@@ -281,9 +281,12 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 			},
 		},
 		Spec: terrakojoiov1alpha1.WorkflowSpec{
-			BranchRef: branch.Name,
-			Template:  templateName,
-			Path:      path,
+			Branch:     branch.Name,
+			Owner:      branch.Spec.Owner,
+			Repository: branch.Spec.Repository,
+			SHA:        branch.Spec.SHA,
+			Template:   templateName,
+			Path:       path,
 		},
 	}
 	if err := controllerutil.SetControllerReference(branch, workflow, r.Scheme); err != nil {
