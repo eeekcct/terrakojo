@@ -1,0 +1,11 @@
+apiVersion: terrakojo.io/v1alpha1
+kind: Workflow
+metadata:
+  labels:
+    app.kubernetes.io/name: terrakojo
+    app.kubernetes.io/managed-by: kustomize
+  name: workflow-sample
+spec:
+  branchRef: "branch-sample"
+  template: "workflowtemplate-sample"
+  path: "infra/main.tf"

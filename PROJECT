@@ -8,4 +8,36 @@ layout:
 - go.kubebuilder.io/v4
 projectName: terrakojo
 repo: github.com/eeekcct/terrakojo
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: terrakojo.io
+  kind: Repository
+  path: github.com/eeekcct/terrakojo/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: terrakojo.io
+  kind: Branch
+  path: github.com/eeekcct/terrakojo/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: terrakojo.io
+  kind: Workflow
+  path: github.com/eeekcct/terrakojo/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: terrakojo.io
+  kind: WorkflowTemplate
+  path: github.com/eeekcct/terrakojo/api/v1alpha1
+  version: v1alpha1
 version: "3"

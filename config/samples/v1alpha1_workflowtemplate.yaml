@@ -1,0 +1,18 @@
+apiVersion: terrakojo.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  labels:
+    app.kubernetes.io/name: terrakojo
+    app.kubernetes.io/managed-by: kustomize
+  name: workflowtemplate-sample
+spec:
+  displayName: "Sample WorkflowTemplate"
+  match:
+    paths:
+      - "**/*.tf"
+  steps:
+    - name: "Build Step"
+      image: "busybox:latest"
+      command:
+        - "echo"
+        - "Hello from Terrakojo!"

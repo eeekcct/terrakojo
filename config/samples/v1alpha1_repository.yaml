@@ -1,0 +1,14 @@
+apiVersion: terrakojo.io/v1alpha1
+kind: Repository
+metadata:
+  labels:
+    app.kubernetes.io/name: terrakojo
+    app.kubernetes.io/managed-by: kustomize
+  name: repository-sample
+spec:
+  owner: "eeekcct"
+  name: "terrakojo"
+  type: "github"
+  defaultBranch: "main"
+  githubSecretRef:
+    name: "github-secrets"
