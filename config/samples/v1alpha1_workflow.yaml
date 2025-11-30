@@ -7,4 +7,5 @@ metadata:
   name: workflow-sample
 spec:
   branchRef: "branch-sample"
-  workflowTemplateRef: "workflowtemplate-sample"
+  template: "workflowtemplate-sample"
+  path: "infra/main.tf"

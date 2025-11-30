@@ -49,7 +49,6 @@ type BranchReconciler struct {
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflowtemplates,verbs=get;list;watch
-
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete;deletecollection
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -105,7 +104,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// // Get branch information from GitHub and update status
+	// Get branch information from GitHub and update status
 	// githubBranch, err := ghClient.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
 	// if err != nil {
 	// 	log.Error(err, "unable to get branch info from GitHub")
@@ -243,8 +242,28 @@ func (r *BranchReconciler) setCondition(branch *terrakojoiov1alpha1.Branch, cond
 	})
 }
 
+func indexByOwnerBranchUID(obj client.Object) []string {
+	workflow := obj.(*terrakojoiov1alpha1.Workflow)
+	for _, ref := range workflow.OwnerReferences {
+		if ref.Controller != nil && *ref.Controller && ref.Kind == "Branch" {
+			return []string{string(ref.UID)}
+		}
+	}
+	return nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *BranchReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index Workflow resources by their controlling Branch UID for efficient lookups/deletions
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&terrakojoiov1alpha1.Workflow{},
+		"metadata.ownerReferences.uid",
+		indexByOwnerBranchUID,
+	); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&terrakojoiov1alpha1.Branch{}).
 		Owns(&terrakojoiov1alpha1.Workflow{}).
@@ -277,12 +296,12 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// Use DeleteAllOf with MatchingLabels for owner-uid
+	// Use DeleteAllOf with field selector on ownerReferences.uid (indexed in Setup)
 	if err := r.DeleteAllOf(ctx, &terrakojoiov1alpha1.Workflow{},
 		client.InNamespace(branch.Namespace),
-		client.MatchingLabels{"terrakojo.io/owner-uid": string(branch.UID)},
+		client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
 	); err != nil {
-		log.Info("DeleteAllOf with MatchingLabels failed, falling back to list and delete", "error", err)
+		log.Info("DeleteAllOf with MatchingFields failed, falling back to list and delete", "error", err)
 		return r.deleteWorkflowsForBranchFallback(ctx, branch)
 	}
 
@@ -293,25 +312,19 @@ func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch 
 func (r *BranchReconciler) deleteWorkflowsForBranchFallback(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// List all workflows in the namespace
 	var workflows terrakojoiov1alpha1.WorkflowList
-	if err := r.List(ctx, &workflows, &client.ListOptions{
-		Namespace: branch.Namespace,
-	}); err != nil {
+	if err := r.List(ctx, &workflows,
+		client.InNamespace(branch.Namespace),
+		client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
+	); err != nil {
 		return err
 	}
 
-	// Delete workflows owned by this branch
 	for _, workflow := range workflows.Items {
-		for _, ownerRef := range workflow.GetOwnerReferences() {
-			if ownerRef.UID == branch.UID && ownerRef.Kind == "Branch" {
-				if err := r.Delete(ctx, &workflow); err != nil {
-					if client.IgnoreNotFound(err) != nil {
-						log.Error(err, "Failed to delete workflow", "workflow", workflow.Name)
-						return err
-					}
-				}
-				break
+		if err := r.Delete(ctx, &workflow); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				log.Error(err, "Failed to delete workflow", "workflow", workflow.Name)
+				return err
 			}
 		}
 	}

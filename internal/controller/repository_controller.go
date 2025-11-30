@@ -92,20 +92,22 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		_ = ghClient
 	}
 
-	// Get existing Branch resources owned by this Repository
+	// Get existing Branch resources owned by this Repository using the field index
 	var branchList terrakojoiov1alpha1.BranchList
-	if err := r.List(ctx, &branchList, client.InNamespace(req.Namespace)); err != nil {
+	if err := r.List(
+		ctx,
+		&branchList,
+		client.InNamespace(req.Namespace),
+		client.MatchingFields{"metadata.ownerReferences.uid": string(repo.UID)},
+	); err != nil {
 		log.Error(err, "Failed to list Branch resources")
 		return ctrl.Result{}, err
 	}
 
-	// Filter branches that are owned by this repository (using OwnerReference)
+	// Build a map for quick lookup
 	existingBranches := make(map[string]terrakojoiov1alpha1.Branch)
 	for _, branch := range branchList.Items {
-		// Check if this branch is owned by the current repository
-		if r.isOwnedByRepository(&branch, &repo) {
-			existingBranches[branch.Spec.Name] = branch
-		}
+		existingBranches[branch.Spec.Name] = branch
 	}
 
 	// Sync BranchRefs with Branch resources
@@ -254,18 +256,28 @@ func (r *RepositoryReconciler) updateBranchResource(ctx context.Context, barnch 
 	return r.Update(ctx, barnch)
 }
 
-// isOwnedByRepository checks if a Branch is owned by the given Repository
-func (r *RepositoryReconciler) isOwnedByRepository(branch *terrakojoiov1alpha1.Branch, repo *terrakojoiov1alpha1.Repository) bool {
-	for _, ownerRef := range branch.GetOwnerReferences() {
-		if ownerRef.UID == repo.UID && ownerRef.Kind == "Repository" {
-			return true
+func indexByOwnerRepositoryUID(obj client.Object) []string {
+	branch := obj.(*terrakojoiov1alpha1.Branch)
+	for _, ref := range branch.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller && ref.Kind == "Repository" {
+			return []string{string(ref.UID)}
 		}
 	}
-	return false
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *RepositoryReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index Branch resources by their controlling Repository UID for efficient lookups
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&terrakojoiov1alpha1.Branch{},
+		"metadata.ownerReferences.uid",
+		indexByOwnerRepositoryUID,
+	); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&terrakojoiov1alpha1.Repository{}).
 		// Owns(&terrakojoiov1alpha1.Branch{}).
