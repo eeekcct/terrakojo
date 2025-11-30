@@ -42,6 +42,8 @@ type BranchReconciler struct {
 	GitHubClientManager kubernetes.GitHubClientManagerInterface
 }
 
+const branchFinalizer = "terrakojo.io/cleanup-workflows"
+
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/finalizers,verbs=update
@@ -66,6 +68,44 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var branch terrakojoiov1alpha1.Branch
 	if err := r.Get(ctx, req.NamespacedName, &branch); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Handle deletion: ensure workflows are removed before allowing branch GC
+	if !branch.ObjectMeta.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(&branch, branchFinalizer) {
+			if err := r.deleteWorkflowsForBranch(ctx, &branch); err != nil {
+				log.Error(err, "Failed to delete workflows while finalizing branch", "branch", branch.Name)
+				return ctrl.Result{}, err
+			}
+
+			// Wait until all workflows owned by this branch are actually gone (finalizers cleared)
+			var remaining terrakojoiov1alpha1.WorkflowList
+			if err := r.List(ctx, &remaining,
+				client.InNamespace(branch.Namespace),
+				client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
+			); err != nil {
+				return ctrl.Result{}, err
+			}
+			if len(remaining.Items) > 0 {
+				log.Info("Waiting for workflows to finish before deleting branch", "branch", branch.Name, "remainingWorkflows", len(remaining.Items))
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+
+			controllerutil.RemoveFinalizer(&branch, branchFinalizer)
+			if err := r.Update(ctx, &branch); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Ensure finalizer so we can clean workflows on branch deletion
+	if !controllerutil.ContainsFinalizer(&branch, branchFinalizer) {
+		controllerutil.AddFinalizer(&branch, branchFinalizer)
+		if err := r.Update(ctx, &branch); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	lastSHA := branch.Annotations["terrakojo.io/last-sha"]
@@ -299,7 +339,7 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// Use DeleteAllOf with field selector on ownerReferences.uid (indexed in Setup)
+	// Best effort DeleteAllOf via label selector
 	if err := r.DeleteAllOf(ctx, &terrakojoiov1alpha1.Workflow{},
 		client.InNamespace(branch.Namespace),
 		client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
@@ -313,21 +353,17 @@ func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch 
 }
 
 func (r *BranchReconciler) deleteWorkflowsForBranchFallback(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
-	log := logf.FromContext(ctx)
-
 	var workflows terrakojoiov1alpha1.WorkflowList
 	if err := r.List(ctx, &workflows,
 		client.InNamespace(branch.Namespace),
 		client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
 	); err != nil {
-		return err
+		return fmt.Errorf("failed to list workflows for branch: %w", err)
 	}
-
 	for _, workflow := range workflows.Items {
 		if err := r.Delete(ctx, &workflow); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				log.Error(err, "Failed to delete workflow", "workflow", workflow.Name)
-				return err
+				return fmt.Errorf("failed to delete workflow %s: %w", workflow.Name, err)
 			}
 		}
 	}

@@ -97,8 +97,10 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	checkRunName := workflow.Status.CheckRunName
 	checkRunID := int64(workflow.Status.CheckRunID)
 
+	branchNotFound := false
 	var branch terrakojoiov1alpha1.Branch
-	if err := r.Get(ctx, client.ObjectKey{Name: branchRef, Namespace: workflow.Namespace}, &branch); err != nil {
+	err := r.Get(ctx, client.ObjectKey{Name: branchRef, Namespace: workflow.Namespace}, &branch)
+	if err != nil && client.IgnoreNotFound(err) != nil {
 		log.Error(err, "Failed to get branch for Workflow",
 			"workflow", workflow.Name,
 			"owner", owner,
@@ -106,20 +108,25 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			"branch", branchRef,
 		)
 		return ctrl.Result{}, err
+	} else if err != nil && client.IgnoreNotFound(err) == nil {
+		branchNotFound = true
 	}
 
+	var ghClient github.ClientInterface
 	if r.GitHubClientManager == nil {
 		log.Error(nil, "GitHubClientManager not initialized")
 		return ctrl.Result{}, fmt.Errorf("GitHubClientManager not initialized")
 	}
-	ghClient, err := r.GitHubClientManager.GetClientForBranch(ctx, &branch)
-	if err != nil {
-		log.Error(err, "Failed to create GitHub client for workflow",
-			"workflow", workflow.Name,
-			"owner", owner,
-			"repository", repo,
-		)
-		return ctrl.Result{}, err
+	if !branchNotFound {
+		ghClient, err = r.GitHubClientManager.GetClientForBranch(ctx, &branch)
+		if err != nil {
+			log.Error(err, "Failed to create GitHub client for workflow",
+				"workflow", workflow.Name,
+				"owner", owner,
+				"repository", repo,
+			)
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Handle deletion first so we can finalize and report cancellation
@@ -127,10 +134,12 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if !controllerutil.ContainsFinalizer(&workflow, workflowFinalizer) {
 			return ctrl.Result{}, nil
 		}
-		if err := r.handleWorkflowDeletion(ctx, ghClient, &workflow, jobName); err != nil {
-			log.Error(err, "Failed to handle workflow deletion",
-				"workflow", workflow.Name)
-			return ctrl.Result{}, err
+		if !branchNotFound {
+			if err := r.handleWorkflowDeletion(ctx, ghClient, &workflow, jobName); err != nil {
+				log.Error(err, "Failed to handle workflow deletion",
+					"workflow", workflow.Name)
+				return ctrl.Result{}, err
+			}
 		}
 		controllerutil.RemoveFinalizer(&workflow, workflowFinalizer)
 		if err := r.Update(ctx, &workflow); err != nil {
@@ -144,6 +153,25 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		controllerutil.AddFinalizer(&workflow, workflowFinalizer)
 		if err := r.Update(ctx, &workflow); err != nil {
 			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	if branchNotFound {
+		log.Info("Branch not found for Workflow, skipping processing",
+			"workflow", workflow.Name,
+			"owner", owner,
+			"repository", repo,
+			"branch", branchRef,
+		)
+		err := r.Delete(ctx, &workflow)
+		if err != nil && client.IgnoreNotFound(err) != nil {
+			log.Error(err, "Failed to delete Workflow with missing branch",
+				"workflow", workflow.Name,
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+			)
 		}
 		return ctrl.Result{}, nil
 	}

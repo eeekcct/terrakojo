@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,6 +38,8 @@ type RepositoryReconciler struct {
 	Scheme              *runtime.Scheme
 	GitHubClientManager kubernetes.GitHubClientManagerInterface
 }
+
+const repositoryFinalizer = "terrakojo.io/cleanup-branches"
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories/status,verbs=get;update;patch
@@ -59,6 +62,32 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var repo terrakojoiov1alpha1.Repository
 	if err := r.Get(ctx, req.NamespacedName, &repo); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Handle deletion and cleanup owned Branches first
+	if !repo.ObjectMeta.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(&repo, repositoryFinalizer) {
+			if res, err := r.handleRepositoryDeletion(ctx, &repo); err != nil {
+				log.Error(err, "Failed to cleanup branches before deleting repository")
+				return ctrl.Result{}, err
+			} else if res.RequeueAfter > 0 {
+				return res, nil
+			}
+			controllerutil.RemoveFinalizer(&repo, repositoryFinalizer)
+			if err := r.Update(ctx, &repo); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Ensure finalizer to guarantee branch cleanup
+	if !controllerutil.ContainsFinalizer(&repo, repositoryFinalizer) {
+		controllerutil.AddFinalizer(&repo, repositoryFinalizer)
+		if err := r.Update(ctx, &repo); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Ensure required labels are present
@@ -92,7 +121,6 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		_ = ghClient
 	}
 
-	// Get existing Branch resources owned by this Repository using the field index
 	var branchList terrakojoiov1alpha1.BranchList
 	if err := r.List(
 		ctx,
@@ -141,6 +169,13 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 	repoNameLabel := "terrakojo.io/repo-name"
 	if repo.Labels[repoNameLabel] != repo.Spec.Name {
 		repo.Labels[repoNameLabel] = repo.Spec.Name
+		needsUpdate = true
+	}
+
+	// Ensure repository UID label (used for branch selection)
+	repoUIDLabel := "terrakojo.io/repo-uid"
+	if repo.Labels[repoUIDLabel] != string(repo.UID) {
+		repo.Labels[repoUIDLabel] = string(repo.UID)
 		needsUpdate = true
 	}
 
@@ -225,6 +260,9 @@ func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *t
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%s", repo.Spec.Name, branch.Ref),
 			Namespace: repo.Namespace,
+			Labels: map[string]string{
+				"terrakojo.io/repo-uid": string(repo.UID),
+			},
 		},
 		Spec: terrakojoiov1alpha1.BranchSpec{
 			Owner:      repo.Spec.Owner,
@@ -263,6 +301,68 @@ func indexByOwnerRepositoryUID(obj client.Object) []string {
 			return []string{string(ref.UID)}
 		}
 	}
+	return nil
+}
+
+// handleRepositoryDeletion removes all Branch resources owned by the Repository to avoid orphaned dependents.
+func (r *RepositoryReconciler) handleRepositoryDeletion(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if err := r.deleteBranchesForRepository(ctx, repo); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Ensure all branches are actually gone before removing the finalizer
+	var remaining terrakojoiov1alpha1.BranchList
+	if err := r.List(ctx, &remaining,
+		client.InNamespace(repo.Namespace),
+		client.MatchingFields{"metadata.ownerReferences.uid": string(repo.UID)},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list branches while waiting for deletion: %w", err)
+	}
+	if len(remaining.Items) > 0 {
+		log.Info("Waiting for branches to be removed before finalizing repository", "repository", repo.Name, "remainingBranches", len(remaining.Items))
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	log.Info("Cleaned up branches before repository deletion", "repository", repo.Name)
+	return ctrl.Result{}, nil
+}
+
+// deleteBranchesForRepository deletes all Branches owned by the given Repository.
+// It mirrors BranchReconciler.deleteWorkflowsForBranch by attempting DeleteAllOf first
+// and falling back to list+delete when needed.
+func (r *RepositoryReconciler) deleteBranchesForRepository(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
+	log := logf.FromContext(ctx)
+
+	// Best effort DeleteAllOf via label selector
+	if err := r.DeleteAllOf(ctx, &terrakojoiov1alpha1.Branch{},
+		client.InNamespace(repo.Namespace),
+		client.MatchingFields{"metadata.ownerReferences.uid": string(repo.UID)},
+	); err != nil {
+		log.Info("DeleteAllOf branches with labels failed, falling back to list and delete", "error", err)
+		return r.deleteBranchesForRepositoryFallback(ctx, repo)
+	}
+
+	return nil
+}
+
+// deleteBranchesForRepositoryFallback lists branches via field index and deletes them individually.
+func (r *RepositoryReconciler) deleteBranchesForRepositoryFallback(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
+	var branchList terrakojoiov1alpha1.BranchList
+	if err := r.List(ctx, &branchList,
+		client.InNamespace(repo.Namespace),
+		client.MatchingFields{"metadata.ownerReferences.uid": string(repo.UID)},
+	); err != nil {
+		return fmt.Errorf("failed to list branches for repository: %w", err)
+	}
+
+	for _, b := range branchList.Items {
+		if delErr := r.Delete(ctx, &b); delErr != nil && client.IgnoreNotFound(delErr) != nil {
+			return fmt.Errorf("failed to delete branch %s: %w", b.Name, delErr)
+		}
+	}
+
 	return nil
 }
 
