@@ -114,7 +114,6 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	} else {
 		log.Info("Successfully created GitHub client for repository",
-			"repository", repo.Name,
 			"owner", repo.Spec.Owner,
 			"secretName", repo.Spec.GitHubSecretRef.Name)
 		// Store client for potential later use
@@ -188,7 +187,7 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 	}
 
 	if needsUpdate {
-		log.Info("Updating Repository labels", "name", repo.Name, "namespace", repo.Namespace)
+		log.Info("Updating Repository labels")
 		if err := r.Update(ctx, repo); err != nil {
 			return false, fmt.Errorf("failed to update Repository labels: %w", err)
 		}
@@ -220,7 +219,7 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 			if err := r.Delete(ctx, &branch); err != nil {
 				return err
 			}
-			log.Info("Deleted Branch resource", "branch", branchName, "namespace", repo.Namespace)
+			log.Info("Deleted Branch resource", "branch", branchName)
 		}
 	}
 
@@ -236,7 +235,7 @@ func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *t
 		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
 			return fmt.Errorf("failed to create branch: %w", err)
 		}
-		log.Info("Created Branch resource", "branch", branchInfo.Ref, "namespace", repo.Namespace)
+		log.Info("Created Branch resource", "branch", branchInfo.Ref)
 		return nil
 	}
 
@@ -321,11 +320,11 @@ func (r *RepositoryReconciler) handleRepositoryDeletion(ctx context.Context, rep
 		return ctrl.Result{}, fmt.Errorf("failed to list branches while waiting for deletion: %w", err)
 	}
 	if len(remaining.Items) > 0 {
-		log.Info("Waiting for branches to be removed before finalizing repository", "repository", repo.Name, "remainingBranches", len(remaining.Items))
+		log.Info("Waiting for branches to be removed before finalizing repository", "remainingBranches", len(remaining.Items))
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	log.Info("Cleaned up branches before repository deletion", "repository", repo.Name)
+	log.Info("Cleaned up branches before repository deletion")
 	return ctrl.Result{}, nil
 }
 

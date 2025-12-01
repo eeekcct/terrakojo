@@ -74,7 +74,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if !branch.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&branch, branchFinalizer) {
 			if err := r.deleteWorkflowsForBranch(ctx, &branch); err != nil {
-				log.Error(err, "Failed to delete workflows while finalizing branch", "branch", branch.Name)
+				log.Error(err, "Failed to delete workflows while finalizing branch")
 				return ctrl.Result{}, err
 			}
 
@@ -87,7 +87,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				return ctrl.Result{}, err
 			}
 			if len(remaining.Items) > 0 {
-				log.Info("Waiting for workflows to finish before deleting branch", "branch", branch.Name, "remainingWorkflows", len(remaining.Items))
+				log.Info("Waiting for workflows to finish before deleting branch", "remainingWorkflows", len(remaining.Items))
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
 
@@ -118,13 +118,11 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if lastSHA != "" && lastSHA != branch.Spec.SHA {
 		if err := r.deleteWorkflowsForBranch(ctx, &branch); err != nil {
 			log.Error(err, "Failed to delete existing workflows for branch",
-				"branch", branch.Name,
 				"oldSHA", lastSHA,
 				"newSHA", branch.Spec.SHA)
 			return ctrl.Result{}, err
 		}
 		log.Info("Deleted existing workflows for branch due to SHA change",
-			"branch", branch.Name,
 			"oldSHA", lastSHA,
 			"newSHA", branch.Spec.SHA)
 	}
@@ -138,7 +136,6 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	ghClient, err := r.GitHubClientManager.GetClientForBranch(ctx, &branch)
 	if err != nil {
 		log.Error(err, "Failed to create GitHub client for branch",
-			"branch", branch.Name,
 			"owner", branch.Spec.Owner,
 			"repository", branch.Spec.Repository)
 		return ctrl.Result{}, err
@@ -189,14 +186,14 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			"Failed to list WorkflowTemplates",
 		)
 		if err := r.Status().Update(ctx, &branch); err != nil {
-			log.Error(err, "unable to update Branch status after failing to list WorkflowTemplates", "branch", branch.Name, "namespace", branch.Namespace)
+			log.Error(err, "unable to update Branch status after failing to list WorkflowTemplates")
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	groups := matchTemplates(templates, changedFiles)
 	if len(groups) == 0 {
-		log.Info("No matching WorkflowTemplate found for Branch", "branch", branch.Name, "namespace", branch.Namespace, "changedFiles", changedFiles)
+		log.Info("No matching WorkflowTemplate found for Branch", "changedFiles", changedFiles)
 		return ctrl.Result{}, nil
 	}
 
@@ -221,14 +218,14 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 
 			if err := r.createWorkflowForBranch(ctx, &branch, templateName, wfName, folder); err != nil {
-				log.Error(err, "Failed to create Workflow for Branch", "branch", branch.Name, "namespace", branch.Namespace)
+				log.Error(err, "Failed to create Workflow for Branch")
 				return ctrl.Result{}, err
 			}
 			workflowNames = append(workflowNames, wfName)
 		}
 	}
 
-	log.Info("Created Workflow for Branch", "branch", branch.Name, "namespace", branch.Namespace, "sha", branch.Spec.SHA)
+	log.Info("Created Workflow for Branch", "sha", branch.Spec.SHA)
 
 	branch.Status.Workflows = workflowNames
 	branch.Status.ChangedFiles = changedFiles

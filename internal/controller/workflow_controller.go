@@ -102,7 +102,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	err := r.Get(ctx, client.ObjectKey{Name: branchRef, Namespace: workflow.Namespace}, &branch)
 	if err != nil && client.IgnoreNotFound(err) != nil {
 		log.Error(err, "Failed to get branch for Workflow",
-			"workflow", workflow.Name,
 			"owner", owner,
 			"repository", repo,
 			"branch", branchRef,
@@ -121,7 +120,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		ghClient, err = r.GitHubClientManager.GetClientForBranch(ctx, &branch)
 		if err != nil {
 			log.Error(err, "Failed to create GitHub client for workflow",
-				"workflow", workflow.Name,
 				"owner", owner,
 				"repository", repo,
 			)
@@ -136,8 +134,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		if !branchNotFound {
 			if err := r.handleWorkflowDeletion(ctx, ghClient, &workflow, jobName); err != nil {
-				log.Error(err, "Failed to handle workflow deletion",
-					"workflow", workflow.Name)
+				log.Error(err, "Failed to handle workflow deletion")
 				return ctrl.Result{}, err
 			}
 		}
@@ -159,7 +156,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	if branchNotFound {
 		log.Info("Branch not found for Workflow, skipping processing",
-			"workflow", workflow.Name,
 			"owner", owner,
 			"repository", repo,
 			"branch", branchRef,
@@ -167,7 +163,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		err := r.Delete(ctx, &workflow)
 		if err != nil && client.IgnoreNotFound(err) != nil {
 			log.Error(err, "Failed to delete Workflow with missing branch",
-				"workflow", workflow.Name,
 				"owner", owner,
 				"repository", repo,
 				"branch", branchRef,
@@ -183,8 +178,11 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	if err == nil {
 		// Job exists, update workflow status based on job status
-		phase, err := r.updateWorkflowStatus(ctx, &workflow, &job)
-		if err != nil {
+		phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
+		if !phaseChanged {
+			return ctrl.Result{}, nil
+		}
+		if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
 			return ctrl.Result{}, err
 		}
 		status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
@@ -206,7 +204,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	checkRun, err := ghClient.CreateCheckRun(owner, repo, sha, checkRunName)
 	if err != nil {
 		log.Error(err, "Failed to create GitHub CheckRun for workflow",
-			"workflow", workflow.Name,
 			"owner", owner,
 			"repository", repo,
 			"branch", branchRef,
@@ -219,7 +216,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if client.IgnoreNotFound(err) == nil {
 			// Workflow was deleted, ignore this reconcile
 			log.Info("Workflow was deleted during reconcile, ignoring",
-				"workflow", workflow.Name,
 				"owner", owner,
 				"repository", repo,
 				"branch", branchRef,
@@ -227,7 +223,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Failed to update Workflow status with CheckRunID",
-			"workflow", workflow.Name,
 			"owner", owner,
 			"repository", repo,
 			"branch", branchRef,
@@ -246,11 +241,14 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	log.Info("Created Job for Workflow", "jobName", job.Name, "workflow", workflow.Name, "namespace", workflow.Namespace)
+	log.Info("Created Job for Workflow", "jobName", job.Name)
 
 	workflow.Status.Jobs = append(workflow.Status.Jobs, job.Name)
-	phase, err := r.updateWorkflowStatus(ctx, &workflow, &job)
-	if err != nil {
+	phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
+	if !phaseChanged {
+		return ctrl.Result{}, nil
+	}
+	if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
 		return ctrl.Result{}, err
 	}
 	status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
@@ -297,7 +295,7 @@ func (r *WorkflowReconciler) handleWorkflowDeletion(ctx context.Context, ghClien
 		return err
 	}
 
-	log.Info("Cancelled GitHub CheckRun before workflow deletion", "workflow", workflow.Name, "checkRunID", checkRunID)
+	log.Info("Cancelled GitHub CheckRun before workflow deletion", "checkRunID", checkRunID)
 	return nil
 }
 
@@ -366,7 +364,7 @@ func (r *WorkflowReconciler) normalizeContainerName(name string) string {
 	return normalized
 }
 
-func (r *WorkflowReconciler) updateWorkflowStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, job *batchv1.Job) (WorkflowPhase, error) {
+func (r *WorkflowReconciler) determineWorkflowPhase(workflow *terrakojoiov1alpha1.Workflow, job *batchv1.Job) (WorkflowPhase, bool) {
 	var phase WorkflowPhase
 	if job.Status.Succeeded > 0 {
 		phase = WorkflowPhaseSucceeded
@@ -378,16 +376,17 @@ func (r *WorkflowReconciler) updateWorkflowStatus(ctx context.Context, workflow 
 		phase = WorkflowPhasePending
 	}
 
+	return phase, workflow.Status.Phase != string(phase)
+}
+
+func (r *WorkflowReconciler) updateWorkflowStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) error {
+	workflow.Status.Phase = string(phase)
 	r.setCondition(workflow, "JobStatus", metav1.ConditionTrue, string(phase), fmt.Sprintf("Job is in %s state", phase))
 
 	if err := r.Status().Update(ctx, workflow); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			// Workflow was deleted, ignore this reconcile
-			return phase, nil
-		}
-		return phase, err
+		return err
 	}
-	return phase, nil
+	return nil
 }
 
 func (r *WorkflowReconciler) checkRunStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) (string, string) {
