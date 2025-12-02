@@ -46,6 +46,8 @@ const repositoryFinalizer = "terrakojo.io/cleanup-branches"
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 
+// +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete;deletecollection
+
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
