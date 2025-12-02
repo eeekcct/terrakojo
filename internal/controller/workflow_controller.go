@@ -182,12 +182,12 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if !phaseChanged {
 			return ctrl.Result{}, nil
 		}
-		if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
-			return ctrl.Result{}, err
-		}
 		status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
 		err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
 		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
