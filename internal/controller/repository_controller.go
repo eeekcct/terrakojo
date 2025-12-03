@@ -46,7 +46,7 @@ const repositoryFinalizer = "terrakojo.io/cleanup-branches"
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
 
-// +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete;deletecollection
+// +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -295,16 +295,6 @@ func (r *RepositoryReconciler) updateBranchResource(ctx context.Context, barnch 
 	return r.Update(ctx, barnch)
 }
 
-func indexByOwnerRepositoryUID(obj client.Object) []string {
-	branch := obj.(*terrakojoiov1alpha1.Branch)
-	for _, ref := range branch.GetOwnerReferences() {
-		if ref.Controller != nil && *ref.Controller && ref.Kind == "Repository" {
-			return []string{string(ref.UID)}
-		}
-	}
-	return nil
-}
-
 // handleRepositoryDeletion removes all Branch resources owned by the Repository to avoid orphaned dependents.
 func (r *RepositoryReconciler) handleRepositoryDeletion(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -330,26 +320,8 @@ func (r *RepositoryReconciler) handleRepositoryDeletion(ctx context.Context, rep
 	return ctrl.Result{}, nil
 }
 
-// deleteBranchesForRepository deletes all Branches owned by the given Repository.
-// It mirrors BranchReconciler.deleteWorkflowsForBranch by attempting DeleteAllOf first
-// and falling back to list+delete when needed.
+// deleteBranchesForRepository lists branches via field index and deletes them individually.
 func (r *RepositoryReconciler) deleteBranchesForRepository(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
-	log := logf.FromContext(ctx)
-
-	// Best effort DeleteAllOf via label selector
-	if err := r.DeleteAllOf(ctx, &terrakojoiov1alpha1.Branch{},
-		client.InNamespace(repo.Namespace),
-		client.MatchingFields{"metadata.ownerReferences.uid": string(repo.UID)},
-	); err != nil {
-		log.Info("DeleteAllOf branches with labels failed, falling back to list and delete", "error", err)
-		return r.deleteBranchesForRepositoryFallback(ctx, repo)
-	}
-
-	return nil
-}
-
-// deleteBranchesForRepositoryFallback lists branches via field index and deletes them individually.
-func (r *RepositoryReconciler) deleteBranchesForRepositoryFallback(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
 	var branchList terrakojoiov1alpha1.BranchList
 	if err := r.List(ctx, &branchList,
 		client.InNamespace(repo.Namespace),
@@ -364,6 +336,16 @@ func (r *RepositoryReconciler) deleteBranchesForRepositoryFallback(ctx context.C
 		}
 	}
 
+	return nil
+}
+
+func indexByOwnerRepositoryUID(obj client.Object) []string {
+	branch := obj.(*terrakojoiov1alpha1.Branch)
+	for _, ref := range branch.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller && ref.Kind == "Repository" {
+			return []string{string(ref.UID)}
+		}
+	}
 	return nil
 }
 

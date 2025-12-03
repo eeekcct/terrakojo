@@ -51,7 +51,7 @@ const branchFinalizer = "terrakojo.io/cleanup-workflows"
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflowtemplates,verbs=get;list;watch
-// +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete;deletecollection
+// +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -334,22 +334,6 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 }
 
 func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
-	log := logf.FromContext(ctx)
-
-	// Best effort DeleteAllOf via label selector
-	if err := r.DeleteAllOf(ctx, &terrakojoiov1alpha1.Workflow{},
-		client.InNamespace(branch.Namespace),
-		client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
-	); err != nil {
-		log.Info("DeleteAllOf with MatchingFields failed, falling back to list and delete", "error", err)
-		return r.deleteWorkflowsForBranchFallback(ctx, branch)
-	}
-
-	branch.Status.Workflows = []string{}
-	return nil
-}
-
-func (r *BranchReconciler) deleteWorkflowsForBranchFallback(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
 	var workflows terrakojoiov1alpha1.WorkflowList
 	if err := r.List(ctx, &workflows,
 		client.InNamespace(branch.Namespace),
