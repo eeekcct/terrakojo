@@ -134,9 +134,9 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Build a map for quick lookup
-	existingBranches := make(map[string]terrakojoiov1alpha1.Branch)
+	existingBranches := make(map[string][]terrakojoiov1alpha1.Branch)
 	for _, branch := range branchList.Items {
-		existingBranches[branch.Spec.Name] = branch
+		existingBranches[branch.Spec.Name] = append(existingBranches[branch.Spec.Name], branch)
 	}
 
 	// Sync BranchRefs with Branch resources
@@ -200,28 +200,29 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 }
 
 // syncBranches synchronizes BranchRefs in Repository status with actual Branch resources
-func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string]terrakojoiov1alpha1.Branch) error {
+func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// Build a set of processed branches to track deletions
+	// Track which branch refs are desired
 	desired := make(map[string]bool)
 
 	// Process desired branches (create or update)
 	for _, branchInfo := range repo.Status.BranchList {
 		desired[branchInfo.Ref] = true
-		branch, exists := branches[branchInfo.Ref]
-		if err := r.ensureBranchResource(ctx, repo, branchInfo, branch, exists); err != nil {
+		existingForRef := branches[branchInfo.Ref]
+		if err := r.ensureBranchResource(ctx, repo, branchInfo, existingForRef); err != nil {
 			return err
 		}
+		delete(branches, branchInfo.Ref)
 	}
 
-	// Delete branches that are no longer desired
-	for branchName, branch := range branches {
-		if !desired[branchName] {
-			if err := r.Delete(ctx, &branch); err != nil {
+	// Delete branches that are no longer desired (branch removed from status)
+	for _, staleBranches := range branches {
+		for _, branch := range staleBranches {
+			if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
 				return err
 			}
-			log.Info("Deleted Branch resource", "branch", branchName)
+			log.Info("Deleted Branch resource no longer desired", "branch", branch.Spec.Name, "sha", branch.Spec.SHA)
 		}
 	}
 
@@ -229,27 +230,42 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 }
 
 // ensureBranchResource creates or updates a Branch resource as needed
-func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchInfo terrakojoiov1alpha1.BranchInfo, branch terrakojoiov1alpha1.Branch, exists bool) error {
+func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchInfo terrakojoiov1alpha1.BranchInfo, existing []terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	if !exists {
-		// Branch doesn't exist, create it
+	var current *terrakojoiov1alpha1.Branch
+	for i := range existing {
+		if existing[i].Spec.SHA == branchInfo.SHA {
+			current = &existing[i]
+		} else {
+			// Delete stale branches for this ref (older SHAs)
+			if err := r.Delete(ctx, &existing[i]); err != nil && client.IgnoreNotFound(err) != nil {
+				return fmt.Errorf("failed to delete stale branch %s: %w", existing[i].Name, err)
+			}
+			log.Info("Deleted stale Branch resource",
+				"branch", branchInfo.Ref,
+				"staleSHA", existing[i].Spec.SHA)
+		}
+	}
+
+	if current == nil {
+		// Branch for this SHA doesn't exist, create it
 		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
 			return fmt.Errorf("failed to create branch: %w", err)
 		}
-		log.Info("Created Branch resource", "branch", branchInfo.Ref)
+		log.Info("Created Branch resource", "branch", branchInfo.Ref, "sha", branchInfo.SHA)
+
 		return nil
 	}
 
-	// Branch exists, check if update is needed
-	if r.needsBranchUpdate(&branch, branchInfo) {
-		if err := r.updateBranchResource(ctx, &branch, branchInfo); err != nil {
+	if r.needsBranchUpdate(current, branchInfo) {
+		if err := r.updateBranchResource(ctx, current, branchInfo); err != nil {
 			return fmt.Errorf("failed to update branch: %w", err)
 		}
-		log.Info("Updated Branch resource",
+		log.Info("Updated Branch resource metadata",
 			"branch", branchInfo.Ref,
-			"newSHA", branchInfo.SHA,
-			"oldSHA", branch.Spec.SHA)
+			"sha", branchInfo.SHA,
+			"prNumber", branchInfo.PRNumber)
 	}
 
 	return nil
@@ -257,12 +273,14 @@ func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *t
 
 // createBranchResource creates a new Branch resource
 func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branch terrakojoiov1alpha1.BranchInfo) error {
+	short := shortSHA(branch.SHA)
 	newBranch := &terrakojoiov1alpha1.Branch{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", repo.Spec.Name, branch.Ref),
+			Name:      fmt.Sprintf("%s-%s", repo.Spec.Name, short),
 			Namespace: repo.Namespace,
 			Labels: map[string]string{
-				"terrakojo.io/repo-uid": string(repo.UID),
+				"terrakojo.io/repo-uid":  string(repo.UID),
+				"terrakojo.io/repo-name": repo.Spec.Name,
 			},
 		},
 		Spec: terrakojoiov1alpha1.BranchSpec{
@@ -284,13 +302,11 @@ func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *t
 
 // needsBranchUpdate checks if a Branch resource needs to be updated
 func (r *RepositoryReconciler) needsBranchUpdate(branch *terrakojoiov1alpha1.Branch, branchInfo terrakojoiov1alpha1.BranchInfo) bool {
-	return branch.Spec.SHA != branchInfo.SHA
+	return branch.Spec.PRNumber != branchInfo.PRNumber
 }
 
 // updateBranchResource updates an existing Branch resource
 func (r *RepositoryReconciler) updateBranchResource(ctx context.Context, barnch *terrakojoiov1alpha1.Branch, branchInfo terrakojoiov1alpha1.BranchInfo) error {
-	barnch.Spec.Name = branchInfo.Ref
-	barnch.Spec.SHA = branchInfo.SHA
 	barnch.Spec.PRNumber = branchInfo.PRNumber
 	return r.Update(ctx, barnch)
 }
@@ -337,6 +353,13 @@ func (r *RepositoryReconciler) deleteBranchesForRepository(ctx context.Context, 
 	}
 
 	return nil
+}
+
+func shortSHA(sha string) string {
+	if len(sha) >= 8 {
+		return sha[:8]
+	}
+	return sha
 }
 
 func indexByOwnerRepositoryUID(obj client.Object) []string {

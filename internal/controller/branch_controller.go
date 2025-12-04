@@ -141,29 +141,6 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Get branch information from GitHub and update status
-	// githubBranch, err := ghClient.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
-	// if err != nil {
-	// 	log.Error(err, "unable to get branch info from GitHub")
-	// 	r.setCondition(&branch, "BranchInfoFailed", metav1.ConditionFalse, "GitHubApiFailed", fmt.Sprintf("Failed to get branch info: %v", err))
-	// 	if statusErr := r.Status().Update(ctx, &branch); statusErr != nil {
-	// 		log.Error(statusErr, "unable to update Branch status after GitHub API failure")
-	// 	}
-	// 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil // Retry after 5 minutes
-	// }
-
-	// // Update branch SHA in status if it has changed
-	// if githubBranch.Commit != nil && githubBranch.Commit.SHA != nil {
-	// 	currentSHA := *githubBranch.Commit.SHA
-	// 	if branch.Spec.SHA != currentSHA {
-	// 		branch.Spec.SHA = currentSHA
-	// 		log.Info("Branch SHA updated", "branch", branch.Name, "sha", currentSHA)
-	// 	}
-	// }
-
-	// // Set condition to indicate branch info was retrieved successfully
-	// r.setCondition(&branch, "BranchInfoReady", metav1.ConditionTrue, "BranchInfoRetrieved", "Branch information retrieved successfully from GitHub")
-
 	changedFiles, err := ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
 	if err != nil {
 		log.Error(err, "unable to get changed files from GitHub")
