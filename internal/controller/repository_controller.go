@@ -139,6 +139,12 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		existingBranches[branch.Spec.Name] = append(existingBranches[branch.Spec.Name], branch)
 	}
 
+	// Ensure Branch resources for default branch commit queue
+	if err := r.ensureDefaultBranchCommits(ctx, &repo, existingBranches); err != nil {
+		log.Error(err, "Failed to ensure default branch commit branches")
+		return ctrl.Result{}, err
+	}
+
 	// Sync BranchRefs with Branch resources
 	if err := r.syncBranches(ctx, &repo, existingBranches); err != nil {
 		log.Error(err, "Failed to sync branches")
@@ -208,6 +214,10 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 
 	// Process desired branches (create or update)
 	for _, branchInfo := range repo.Status.BranchList {
+		// Default branch is handled via DefaultBranchCommits queue to preserve all commits
+		if branchInfo.Ref == repo.Spec.DefaultBranch {
+			continue
+		}
 		desired[branchInfo.Ref] = true
 		existingForRef := branches[branchInfo.Ref]
 		if err := r.ensureBranchResource(ctx, repo, branchInfo, existingForRef); err != nil {
@@ -224,6 +234,41 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 			}
 			log.Info("Deleted Branch resource no longer desired", "branch", branch.Spec.Name, "sha", branch.Spec.SHA)
 		}
+	}
+
+	return nil
+}
+
+// ensureDefaultBranchCommits ensures Branch resources exist for every commit queued on the default branch.
+// Unlike PR branches, we do not delete older Branches for the same ref because each commit should be processed.
+func (r *RepositoryReconciler) ensureDefaultBranchCommits(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
+	log := logf.FromContext(ctx)
+
+	defaultRef := repo.Spec.DefaultBranch
+	existingForRef := branches[defaultRef]
+	existingBySHA := make(map[string]struct{})
+	for i := range existingForRef {
+		existingBySHA[existingForRef[i].Spec.SHA] = struct{}{}
+	}
+
+	for _, commit := range repo.Status.DefaultBranchCommits {
+		ref := commit.Ref
+		if ref == "" {
+			ref = defaultRef
+		}
+		if _, found := existingBySHA[commit.SHA]; found {
+			continue
+		}
+		branchInfo := terrakojoiov1alpha1.BranchInfo{
+			Ref:      ref,
+			PRNumber: commit.PRNumber,
+			SHA:      commit.SHA,
+		}
+		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
+			return fmt.Errorf("failed to create branch for default branch commit %s: %w", commit.SHA, err)
+		}
+		log.Info("Created Branch for default branch commit", "ref", ref, "sha", commit.SHA)
+		existingBySHA[commit.SHA] = struct{}{}
 	}
 
 	return nil

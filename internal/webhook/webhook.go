@@ -166,6 +166,23 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 
 	targetRepository := &repositories.Items[0]
 
+	// If this is the default branch, enqueue the commit in DefaultBranchCommits (queue) for processing.
+	if branchInfo.Ref == targetRepository.Spec.DefaultBranch {
+		exists := false
+		for _, c := range targetRepository.Status.DefaultBranchCommits {
+			if c.SHA == branchInfo.SHA {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			targetRepository.Status.DefaultBranchCommits = append(
+				targetRepository.Status.DefaultBranchCommits,
+				branchInfo,
+			)
+		}
+	}
+
 	// Update or add the branch in the BranchList
 	updated := false
 	for i, existingBranch := range targetRepository.Status.BranchList {

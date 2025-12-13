@@ -101,6 +101,12 @@ type RepositoryStatus struct {
 	// +optional
 	BranchList []BranchInfo `json:"branchList,omitempty"`
 
+	// DefaultBranchCommits keeps a queue of commits that have landed on the default branch.
+	// This is used to ensure each merge/push to the default branch gets processed even if multiple
+	// commits arrive while existing jobs are still running.
+	// +optional
+	DefaultBranchCommits []BranchInfo `json:"defaultBranchCommits,omitempty"`
+
 	// Synced indicates whether the repository has been successfully synced
 	// +optional
 	Synced bool `json:"synced,omitempty"`
