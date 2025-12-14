@@ -322,9 +322,14 @@ func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *t
 // createBranchResource creates a new Branch resource
 func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branch terrakojoiov1alpha1.BranchInfo) error {
 	short := shortSHA(branch.SHA)
+	// Add "default" prefix for default branch to avoid name collision with PR branches using same SHA
+	branchName := fmt.Sprintf("%s-%s", repo.Spec.Name, short)
+	if branch.Ref == repo.Spec.DefaultBranch {
+		branchName = fmt.Sprintf("%s-default-%s", repo.Spec.Name, short)
+	}
 	newBranch := &terrakojoiov1alpha1.Branch{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", repo.Spec.Name, short),
+			Name:      branchName,
 			Namespace: repo.Namespace,
 			Labels: map[string]string{
 				"terrakojo.io/repo-uid":  string(repo.UID),

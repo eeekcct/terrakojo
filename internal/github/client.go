@@ -116,24 +116,17 @@ func (c *Client) GetChangedFiles(owner, repo string, prNumber int) ([]string, er
 }
 
 func (c *Client) GetChangedFilesForCommit(owner, repo, sha string) ([]string, error) {
-	var allFiles []string
-	opt := &github.ListOptions{PerPage: 100}
-	for {
-		commit, resp, err := c.client.Repositories.GetCommit(c.ctx, owner, repo, sha, opt)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get commit %s: %w", sha, err)
-		}
-		for _, file := range commit.Files {
-			if file.Filename != nil {
-				allFiles = append(allFiles, *file.Filename)
-			}
-		}
-		if resp.NextPage == 0 {
-			break
-		}
-		opt.Page = resp.NextPage
+	commit, _, err := c.client.Repositories.GetCommit(c.ctx, owner, repo, sha, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit %s: %w", sha, err)
 	}
-	return allFiles, nil
+	var files []string
+	for _, file := range commit.Files {
+		if file.Filename != nil {
+			files = append(files, *file.Filename)
+		}
+	}
+	return files, nil
 }
 
 func (c *Client) GetBranch(owner, repo, branchName string) (*github.Branch, error) {
