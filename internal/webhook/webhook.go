@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"strings"
 
+	"slices"
+
+	"k8s.io/client-go/util/retry"
+
 	"github.com/eeekcct/terrakojo/api/v1alpha1"
 	"github.com/eeekcct/terrakojo/internal/config"
 	ghpkg "github.com/eeekcct/terrakojo/internal/github"
@@ -165,26 +169,61 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 	}
 
 	targetRepository := &repositories.Items[0]
+	key := client.ObjectKey{Name: targetRepository.Name, Namespace: targetRepository.Namespace}
 
-	// Update or add the branch in the BranchList
-	updated := false
-	for i, existingBranch := range targetRepository.Status.BranchList {
-		if existingBranch.Ref == branchInfo.Ref {
-			targetRepository.Status.BranchList[i] = branchInfo
-			updated = true
-			break
+	// Use optimistic retry to avoid clobbering concurrent controller updates.
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var repo v1alpha1.Repository
+		if err := h.client.Get(context.Background(), key, &repo); err != nil {
+			return err
 		}
-	}
 
-	if !updated {
-		targetRepository.Status.BranchList = append(targetRepository.Status.BranchList, branchInfo)
-	}
+		changed := false
 
-	// Mark as synced
-	targetRepository.Status.Synced = true
+		// Default branch queue: append if this SHA is not already present.
+		if branchInfo.Ref == repo.Spec.DefaultBranch {
+			before := len(repo.Status.DefaultBranchCommits)
+			exists := false
+			for _, c := range repo.Status.DefaultBranchCommits {
+				if c.SHA == branchInfo.SHA {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				repo.Status.DefaultBranchCommits = append(repo.Status.DefaultBranchCommits, branchInfo)
+			}
+			if len(repo.Status.DefaultBranchCommits) != before {
+				changed = true
+			}
+		}
 
-	// Update the Repository status
-	err = h.client.Status().Update(context.Background(), targetRepository)
+		// BranchList: only track non-default branches; default branch is managed via DefaultBranchCommits queue.
+		if branchInfo.Ref != repo.Spec.DefaultBranch {
+			// Replace existing entry for the same ref (keep only latest SHA per branch).
+			before := len(repo.Status.BranchList)
+			oldSHA := ""
+			repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
+				if b.Ref == branchInfo.Ref {
+					oldSHA = b.SHA
+					return true
+				}
+				return false
+			})
+			repo.Status.BranchList = append(repo.Status.BranchList, branchInfo)
+			if len(repo.Status.BranchList) != before || oldSHA != branchInfo.SHA {
+				changed = true
+			}
+		}
+
+		if !changed {
+			return nil
+		}
+
+		repo.Status.Synced = true
+		return h.client.Status().Update(context.Background(), &repo)
+	})
+
 	if err != nil {
 		log.Printf("Failed to update Repository %s status: %v", targetRepository.Name, err)
 		return err

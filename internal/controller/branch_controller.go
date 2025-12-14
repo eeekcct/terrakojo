@@ -23,9 +23,12 @@ import (
 	"path"
 	"time"
 
+	"slices"
+
 	"github.com/bmatcuk/doublestar/v4"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -51,7 +54,7 @@ const branchFinalizer = "terrakojo.io/cleanup-workflows"
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflowtemplates,verbs=get;list;watch
-// +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete;deletecollection
+// +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -74,20 +77,18 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if !branch.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&branch, branchFinalizer) {
 			if err := r.deleteWorkflowsForBranch(ctx, &branch); err != nil {
-				log.Error(err, "Failed to delete workflows while finalizing branch", "branch", branch.Name)
+				log.Error(err, "Failed to delete workflows while finalizing branch")
 				return ctrl.Result{}, err
 			}
 
 			// Wait until all workflows owned by this branch are actually gone (finalizers cleared)
-			var remaining terrakojoiov1alpha1.WorkflowList
-			if err := r.List(ctx, &remaining,
-				client.InNamespace(branch.Namespace),
-				client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
-			); err != nil {
+			remaining, err := r.listWorkflowsForBranch(ctx, &branch)
+			if err != nil {
+				log.Error(err, "Failed to list remaining workflows while finalizing branch")
 				return ctrl.Result{}, err
 			}
-			if len(remaining.Items) > 0 {
-				log.Info("Waiting for workflows to finish before deleting branch", "branch", branch.Name, "remainingWorkflows", len(remaining.Items))
+			if len(remaining) > 0 {
+				log.Info("Waiting for workflows to finish before deleting branch", "remainingWorkflows", len(remaining))
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 			}
 
@@ -108,6 +109,28 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
+	// If all workflows owned by this branch are completed, clean up Repository status and delete the Branch.
+	workflows, err := r.listWorkflowsForBranch(ctx, &branch)
+	if err != nil {
+		log.Error(err, "Failed to list workflows for branch")
+		return ctrl.Result{}, err
+	}
+	if len(workflows) > 0 && allWorkflowsCompleted(workflows) {
+		if err := r.cleanupRepositoryStatus(ctx, &branch); err != nil {
+			log.Error(err, "Failed to cleanup repository status for completed branch")
+			return ctrl.Result{}, err
+		}
+		if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
+			log.Error(err, "Failed to delete completed branch")
+			return ctrl.Result{}, err
+		}
+		log.Info("Deleted Branch after all workflows completed",
+			"branchName", branch.Spec.Name,
+			"sha", branch.Spec.SHA)
+		return ctrl.Result{}, nil
+	}
+
+	// Deplicate: Check if the SHA has changed since last reconcile
 	lastSHA := branch.Annotations["terrakojo.io/last-sha"]
 	if lastSHA == branch.Spec.SHA {
 		// No changes in SHA, nothing to do
@@ -118,13 +141,11 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if lastSHA != "" && lastSHA != branch.Spec.SHA {
 		if err := r.deleteWorkflowsForBranch(ctx, &branch); err != nil {
 			log.Error(err, "Failed to delete existing workflows for branch",
-				"branch", branch.Name,
 				"oldSHA", lastSHA,
 				"newSHA", branch.Spec.SHA)
 			return ctrl.Result{}, err
 		}
 		log.Info("Deleted existing workflows for branch due to SHA change",
-			"branch", branch.Name,
 			"oldSHA", lastSHA,
 			"newSHA", branch.Spec.SHA)
 	}
@@ -138,41 +159,37 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	ghClient, err := r.GitHubClientManager.GetClientForBranch(ctx, &branch)
 	if err != nil {
 		log.Error(err, "Failed to create GitHub client for branch",
-			"branch", branch.Name,
 			"owner", branch.Spec.Owner,
 			"repository", branch.Spec.Repository)
 		return ctrl.Result{}, err
 	}
 
-	// Get branch information from GitHub and update status
-	// githubBranch, err := ghClient.GetBranch(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.Name)
-	// if err != nil {
-	// 	log.Error(err, "unable to get branch info from GitHub")
-	// 	r.setCondition(&branch, "BranchInfoFailed", metav1.ConditionFalse, "GitHubApiFailed", fmt.Sprintf("Failed to get branch info: %v", err))
-	// 	if statusErr := r.Status().Update(ctx, &branch); statusErr != nil {
-	// 		log.Error(statusErr, "unable to update Branch status after GitHub API failure")
-	// 	}
-	// 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil // Retry after 5 minutes
-	// }
-
-	// // Update branch SHA in status if it has changed
-	// if githubBranch.Commit != nil && githubBranch.Commit.SHA != nil {
-	// 	currentSHA := *githubBranch.Commit.SHA
-	// 	if branch.Spec.SHA != currentSHA {
-	// 		branch.Spec.SHA = currentSHA
-	// 		log.Info("Branch SHA updated", "branch", branch.Name, "sha", currentSHA)
-	// 	}
-	// }
-
-	// // Set condition to indicate branch info was retrieved successfully
-	// r.setCondition(&branch, "BranchInfoReady", metav1.ConditionTrue, "BranchInfoRetrieved", "Branch information retrieved successfully from GitHub")
-
-	changedFiles, err := ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
-	if err != nil {
-		log.Error(err, "unable to get changed files from GitHub")
-		return ctrl.Result{}, err
+	var changedFiles []string
+	if branch.Spec.PRNumber != 0 {
+		// PR branch: use PR API to get changed files
+		changedFiles, err = ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
+		if err != nil {
+			log.Error(err, "unable to get changed files from GitHub PR")
+			return ctrl.Result{}, err
+		}
+	} else {
+		// Default branch or direct push: use commit API to get changed files
+		changedFiles, err = ghClient.GetChangedFilesForCommit(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.SHA)
+		if err != nil {
+			log.Error(err, "unable to get changed files from GitHub commit")
+			return ctrl.Result{}, err
+		}
 	}
 	if len(changedFiles) == 0 {
+		log.Info("No changed files for Branch, cleaning up")
+		if err := r.cleanupRepositoryStatus(ctx, &branch); err != nil {
+			log.Error(err, "Failed to cleanup repository status for branch with no changed files")
+			return ctrl.Result{}, err
+		}
+		if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
+			log.Error(err, "Failed to delete branch with no changed files")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -189,14 +206,22 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			"Failed to list WorkflowTemplates",
 		)
 		if err := r.Status().Update(ctx, &branch); err != nil {
-			log.Error(err, "unable to update Branch status after failing to list WorkflowTemplates", "branch", branch.Name, "namespace", branch.Namespace)
+			log.Error(err, "unable to update Branch status after failing to list WorkflowTemplates")
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	groups := matchTemplates(templates, changedFiles)
 	if len(groups) == 0 {
-		log.Info("No matching WorkflowTemplate found for Branch", "branch", branch.Name, "namespace", branch.Namespace, "changedFiles", changedFiles)
+		log.Info("No matching WorkflowTemplate found for Branch, cleaning up")
+		if err := r.cleanupRepositoryStatus(ctx, &branch); err != nil {
+			log.Error(err, "Failed to cleanup repository status for branch with no matching templates")
+			return ctrl.Result{}, err
+		}
+		if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
+			log.Error(err, "Failed to delete branch with no matching templates")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -221,14 +246,14 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 
 			if err := r.createWorkflowForBranch(ctx, &branch, templateName, wfName, folder); err != nil {
-				log.Error(err, "Failed to create Workflow for Branch", "branch", branch.Name, "namespace", branch.Namespace)
+				log.Error(err, "Failed to create Workflow for Branch")
 				return ctrl.Result{}, err
 			}
 			workflowNames = append(workflowNames, wfName)
 		}
 	}
 
-	log.Info("Created Workflow for Branch", "branch", branch.Name, "namespace", branch.Namespace, "sha", branch.Spec.SHA)
+	log.Info("Created Workflow for Branch", "sha", branch.Spec.SHA)
 
 	branch.Status.Workflows = workflowNames
 	branch.Status.ChangedFiles = changedFiles
@@ -337,22 +362,6 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 }
 
 func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
-	log := logf.FromContext(ctx)
-
-	// Best effort DeleteAllOf via label selector
-	if err := r.DeleteAllOf(ctx, &terrakojoiov1alpha1.Workflow{},
-		client.InNamespace(branch.Namespace),
-		client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
-	); err != nil {
-		log.Info("DeleteAllOf with MatchingFields failed, falling back to list and delete", "error", err)
-		return r.deleteWorkflowsForBranchFallback(ctx, branch)
-	}
-
-	branch.Status.Workflows = []string{}
-	return nil
-}
-
-func (r *BranchReconciler) deleteWorkflowsForBranchFallback(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
 	var workflows terrakojoiov1alpha1.WorkflowList
 	if err := r.List(ctx, &workflows,
 		client.InNamespace(branch.Namespace),
@@ -422,4 +431,99 @@ func generateRandomString(length int) (string, error) {
 		b[i] = charset[b[i]%byte(len(charset))]
 	}
 	return string(b), nil
+}
+
+// listWorkflowsForBranch returns workflows owned by the branch using the UID field index.
+func (r *BranchReconciler) listWorkflowsForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) ([]terrakojoiov1alpha1.Workflow, error) {
+	var workflows terrakojoiov1alpha1.WorkflowList
+	if err := r.List(ctx, &workflows,
+		client.InNamespace(branch.Namespace),
+		client.MatchingFields{"metadata.ownerReferences.uid": string(branch.UID)},
+	); err != nil {
+		return nil, err
+	}
+	return workflows.Items, nil
+}
+
+// allWorkflowsCompleted returns true if every workflow is in a terminal phase.
+func allWorkflowsCompleted(workflows []terrakojoiov1alpha1.Workflow) bool {
+	if len(workflows) == 0 {
+		return false
+	}
+	for _, wf := range workflows {
+		switch wf.Status.Phase {
+		case string(WorkflowPhaseSucceeded), string(WorkflowPhaseFailed), string(WorkflowPhaseCancelled):
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// cleanupRepositoryStatus removes the branch entry from the owning Repository status to prevent re-creation.
+func (r *BranchReconciler) cleanupRepositoryStatus(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
+	log := logf.FromContext(ctx)
+
+	repos := &terrakojoiov1alpha1.RepositoryList{}
+	if err := r.List(ctx, repos,
+		client.InNamespace(branch.Namespace),
+		client.MatchingLabels{
+			"terrakojo.io/owner":     branch.Spec.Owner,
+			"terrakojo.io/repo-name": branch.Spec.Repository,
+		},
+	); err != nil {
+		return fmt.Errorf("failed to list repositories for branch cleanup: %w", err)
+	}
+	if len(repos.Items) == 0 {
+		log.Info("No repository found for branch cleanup",
+			"owner", branch.Spec.Owner,
+			"repo", branch.Spec.Repository)
+		return nil
+	}
+
+	// Use optimistic retry to avoid conflicts with webhook status updates.
+	repoName := repos.Items[0].Name
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var repo terrakojoiov1alpha1.Repository
+		if err := r.Get(ctx, client.ObjectKey{Name: repoName, Namespace: branch.Namespace}, &repo); err != nil {
+			return fmt.Errorf("failed to re-fetch repository %s: %w", repoName, err)
+		}
+
+		changed := false
+
+		if branch.Spec.Name == repo.Spec.DefaultBranch {
+			// Default branch: manage only the commit queue.
+			before := len(repo.Status.DefaultBranchCommits)
+			repo.Status.DefaultBranchCommits = slices.DeleteFunc(repo.Status.DefaultBranchCommits, func(c terrakojoiov1alpha1.BranchInfo) bool {
+				return c.SHA == branch.Spec.SHA
+			})
+			if len(repo.Status.DefaultBranchCommits) != before {
+				changed = true
+			}
+		} else {
+			// Non-default branches live in BranchList.
+			before := len(repo.Status.BranchList)
+			repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b terrakojoiov1alpha1.BranchInfo) bool {
+				return b.Ref == branch.Spec.Name && b.SHA == branch.Spec.SHA
+			})
+			if len(repo.Status.BranchList) != before {
+				changed = true
+			}
+		}
+
+		if !changed {
+			return nil
+		}
+
+		if err := r.Status().Update(ctx, &repo); err != nil {
+			return err
+		}
+
+		log.Info("Cleaned repository status after branch completion",
+			"repository", repo.Name,
+			"branchRef", branch.Spec.Name,
+			"sha", branch.Spec.SHA)
+		return nil
+	})
 }

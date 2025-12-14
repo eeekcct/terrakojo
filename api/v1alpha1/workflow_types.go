@@ -74,6 +74,9 @@ type WorkflowStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// +optional
+	Phase string `json:"phase,omitempty"`
+
 	// Jobs contains the list of Job names created for this workflow
 	// +optional
 	Jobs []string `json:"jobs,omitempty"`
