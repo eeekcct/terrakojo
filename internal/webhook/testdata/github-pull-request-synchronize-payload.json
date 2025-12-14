@@ -1,0 +1,18 @@
+{
+  "action": "synchronize",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "head": {
+      "ref": "feature/auth",
+      "sha": "3333333333333333333333333333333333333333"
+    }
+  },
+  "repository": {
+    "name": "terrakojo",
+    "full_name": "eeekcct/terrakojo",
+    "owner": {
+      "login": "eeekcct"
+    }
+  }
+}

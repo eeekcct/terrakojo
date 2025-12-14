@@ -198,7 +198,24 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 			}
 		}
 
-		// PR open/synchronize: 非defaultブランチの最新SHAで置換。
+		// Push to non-default branch: keep latest SHA per ref in branchList.
+		if webhookInfo.EventType == ghpkg.EventTypePush && branchInfo.Ref != repo.Spec.DefaultBranch {
+			before := len(repo.Status.BranchList)
+			oldSHA := ""
+			repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
+				if b.Ref == branchInfo.Ref {
+					oldSHA = b.SHA
+					return true
+				}
+				return false
+			})
+			repo.Status.BranchList = append(repo.Status.BranchList, branchInfo)
+			if len(repo.Status.BranchList) != before || oldSHA != branchInfo.SHA {
+				changed = true
+			}
+		}
+
+		// PR open/synchronize: replace latest SHA for non-default branch.
 		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action != "closed" {
 			before := len(repo.Status.BranchList)
 			oldSHA := ""
@@ -215,7 +232,7 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 			}
 		}
 
-		// PR closed (merged/non-merged): ブランチをlistから削除。defaultBranchCommitsは触らない。
+		// PR closed (merged/non-merged): remove branch entry from list; leave defaultBranchCommits untouched.
 		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == "closed" {
 			before := len(repo.Status.BranchList)
 			repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
