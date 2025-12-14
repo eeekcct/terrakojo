@@ -285,41 +285,37 @@ func (r *RepositoryReconciler) syncDefaultBranchCommits(ctx context.Context, rep
 func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchInfo terrakojoiov1alpha1.BranchInfo, existing []terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	var current *terrakojoiov1alpha1.Branch
-	for i := range existing {
-		if existing[i].Spec.SHA == branchInfo.SHA {
-			current = &existing[i]
-		} else {
-			// Delete stale branches for this ref (older SHAs)
-			if err := r.Delete(ctx, &existing[i]); err != nil && client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("failed to delete stale branch %s: %w", existing[i].Name, err)
+	// Webhook ensures only latest SHA per ref in BranchList, so existing should have at most one entry
+	if len(existing) > 0 {
+		current := &existing[0]
+		if current.Spec.SHA == branchInfo.SHA {
+			// Branch already exists with correct SHA, check if metadata needs update
+			if r.needsBranchUpdate(current, branchInfo) {
+				if err := r.updateBranchResource(ctx, current, branchInfo); err != nil {
+					return fmt.Errorf("failed to update branch: %w", err)
+				}
+				log.Info("Updated Branch resource metadata",
+					"branch", branchInfo.Ref,
+					"sha", branchInfo.SHA,
+					"prNumber", branchInfo.PRNumber)
 			}
-			log.Info("Deleted stale Branch resource",
-				"branch", branchInfo.Ref,
-				"staleSHA", existing[i].Spec.SHA)
+			return nil
 		}
-	}
-
-	if current == nil {
-		// Branch for this SHA doesn't exist, create it
-		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
-			return fmt.Errorf("failed to create branch: %w", err)
+		// SHA changed, delete old Branch (new one will be created below)
+		if err := r.Delete(ctx, current); err != nil && client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete branch with old SHA %s: %w", current.Name, err)
 		}
-		log.Info("Created Branch resource", "branch", branchInfo.Ref, "sha", branchInfo.SHA)
-
-		return nil
-	}
-
-	if r.needsBranchUpdate(current, branchInfo) {
-		if err := r.updateBranchResource(ctx, current, branchInfo); err != nil {
-			return fmt.Errorf("failed to update branch: %w", err)
-		}
-		log.Info("Updated Branch resource metadata",
+		log.Info("Deleted Branch resource with old SHA",
 			"branch", branchInfo.Ref,
-			"sha", branchInfo.SHA,
-			"prNumber", branchInfo.PRNumber)
+			"oldSHA", current.Spec.SHA,
+			"newSHA", branchInfo.SHA)
 	}
 
+	// Create new Branch
+	if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
+		return fmt.Errorf("failed to create branch: %w", err)
+	}
+	log.Info("Created Branch resource", "branch", branchInfo.Ref, "sha", branchInfo.SHA)
 	return nil
 }
 

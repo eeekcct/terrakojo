@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"k8s.io/client-go/util/retry"
 	"slices"
+
+	"k8s.io/client-go/util/retry"
 
 	"github.com/eeekcct/terrakojo/api/v1alpha1"
 	"github.com/eeekcct/terrakojo/internal/config"
@@ -199,13 +200,18 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 
 		// BranchList: only track non-default branches; default branch is managed via DefaultBranchCommits queue.
 		if branchInfo.Ref != repo.Spec.DefaultBranch {
-			// Remove exact ref+SHA duplicate, then append (ensures uniqueness per commit).
+			// Replace existing entry for the same ref (keep only latest SHA per branch).
 			before := len(repo.Status.BranchList)
+			oldSHA := ""
 			repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
-				return b.Ref == branchInfo.Ref && b.SHA == branchInfo.SHA
+				if b.Ref == branchInfo.Ref {
+					oldSHA = b.SHA
+					return true
+				}
+				return false
 			})
 			repo.Status.BranchList = append(repo.Status.BranchList, branchInfo)
-			if len(repo.Status.BranchList) != before || branchInfo.PRNumber != 0 {
+			if len(repo.Status.BranchList) != before || oldSHA != branchInfo.SHA {
 				changed = true
 			}
 		}
