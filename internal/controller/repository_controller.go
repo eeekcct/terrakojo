@@ -211,12 +211,8 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 func (r *RepositoryReconciler) syncBranchList(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// Track which branch refs are desired
-	desired := make(map[string]bool)
-
-	// Process desired branches (create or update)
+	// Process desired branches (create or update). BranchList is latest-one-per-ref.
 	for _, branchInfo := range repo.Status.BranchList {
-		desired[branchInfo.Ref] = true
 		existingForRef := branches[branchInfo.Ref]
 		if err := r.ensureBranchResource(ctx, repo, branchInfo, existingForRef); err != nil {
 			return err
