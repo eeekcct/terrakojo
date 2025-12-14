@@ -23,6 +23,8 @@ import (
 	"path"
 	"time"
 
+	"slices"
+
 	"github.com/bmatcuk/doublestar/v4"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -31,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"slices"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	"github.com/eeekcct/terrakojo/internal/kubernetes"
@@ -163,10 +164,21 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	changedFiles, err := ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
-	if err != nil {
-		log.Error(err, "unable to get changed files from GitHub")
-		return ctrl.Result{}, err
+	var changedFiles []string
+	if branch.Spec.PRNumber != 0 {
+		// PR branch: use PR API to get changed files
+		changedFiles, err = ghClient.GetChangedFiles(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.PRNumber)
+		if err != nil {
+			log.Error(err, "unable to get changed files from GitHub PR")
+			return ctrl.Result{}, err
+		}
+	} else {
+		// Default branch or direct push: use commit API to get changed files
+		changedFiles, err = ghClient.GetChangedFilesForCommit(branch.Spec.Owner, branch.Spec.Repository, branch.Spec.SHA)
+		if err != nil {
+			log.Error(err, "unable to get changed files from GitHub commit")
+			return ctrl.Result{}, err
+		}
 	}
 	if len(changedFiles) == 0 {
 		return ctrl.Result{}, nil

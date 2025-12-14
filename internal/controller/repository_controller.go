@@ -139,15 +139,15 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		existingBranches[branch.Spec.Name] = append(existingBranches[branch.Spec.Name], branch)
 	}
 
-	// Ensure Branch resources for default branch commit queue
-	if err := r.ensureDefaultBranchCommits(ctx, &repo, existingBranches); err != nil {
-		log.Error(err, "Failed to ensure default branch commit branches")
+	// Sync default branch commits from DefaultBranchCommits queue
+	if err := r.syncDefaultBranchCommits(ctx, &repo, existingBranches); err != nil {
+		log.Error(err, "Failed to sync default branch commits")
 		return ctrl.Result{}, err
 	}
 
-	// Sync BranchRefs with Branch resources
-	if err := r.syncBranches(ctx, &repo, existingBranches); err != nil {
-		log.Error(err, "Failed to sync branches")
+	// Sync non-default branches from BranchList
+	if err := r.syncBranchList(ctx, &repo, existingBranches); err != nil {
+		log.Error(err, "Failed to sync branch list")
 		return ctrl.Result{}, err
 	}
 
@@ -205,8 +205,8 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 	return false, nil // No update needed, continue with reconcile
 }
 
-// syncBranches synchronizes BranchRefs in Repository status with actual Branch resources
-func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
+// syncBranchList synchronizes BranchList entries (non-default branches) with actual Branch resources
+func (r *RepositoryReconciler) syncBranchList(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
 	// Track which branch refs are desired
@@ -214,10 +214,6 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 
 	// Process desired branches (create or update)
 	for _, branchInfo := range repo.Status.BranchList {
-		// Default branch is handled via DefaultBranchCommits queue to preserve all commits
-		if branchInfo.Ref == repo.Spec.DefaultBranch {
-			continue
-		}
 		desired[branchInfo.Ref] = true
 		existingForRef := branches[branchInfo.Ref]
 		if err := r.ensureBranchResource(ctx, repo, branchInfo, existingForRef); err != nil {
@@ -239,16 +235,16 @@ func (r *RepositoryReconciler) syncBranches(ctx context.Context, repo *terrakojo
 	return nil
 }
 
-// ensureDefaultBranchCommits ensures Branch resources exist for every commit queued on the default branch.
+// syncDefaultBranchCommits synchronizes Branch resources with DefaultBranchCommits queue on the default branch.
 // Unlike PR branches, we do not delete older Branches for the same ref because each commit should be processed.
-func (r *RepositoryReconciler) ensureDefaultBranchCommits(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
+func (r *RepositoryReconciler) syncDefaultBranchCommits(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
 	defaultRef := repo.Spec.DefaultBranch
 	existingForRef := branches[defaultRef]
-	existingBySHA := make(map[string]struct{})
-	for i := range existingForRef {
-		existingBySHA[existingForRef[i].Spec.SHA] = struct{}{}
+	existingBySHA := make(map[string]terrakojoiov1alpha1.Branch)
+	for _, branch := range existingForRef {
+		existingBySHA[branch.Spec.SHA] = branch
 	}
 
 	for _, commit := range repo.Status.DefaultBranchCommits {
@@ -257,6 +253,7 @@ func (r *RepositoryReconciler) ensureDefaultBranchCommits(ctx context.Context, r
 			ref = defaultRef
 		}
 		if _, found := existingBySHA[commit.SHA]; found {
+			delete(existingBySHA, commit.SHA)
 			continue
 		}
 		branchInfo := terrakojoiov1alpha1.BranchInfo{
@@ -268,8 +265,18 @@ func (r *RepositoryReconciler) ensureDefaultBranchCommits(ctx context.Context, r
 			return fmt.Errorf("failed to create branch for default branch commit %s: %w", commit.SHA, err)
 		}
 		log.Info("Created Branch for default branch commit", "ref", ref, "sha", commit.SHA)
-		existingBySHA[commit.SHA] = struct{}{}
 	}
+
+	// Delete stale default branch Branches (not in DefaultBranchCommits queue)
+	for _, staleBranch := range existingBySHA {
+		if err := r.Delete(ctx, &staleBranch); err != nil && client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete stale default branch commit branch %s: %w", staleBranch.Name, err)
+		}
+		log.Info("Deleted stale Branch resource for default branch commit", "branch", staleBranch.Spec.Name, "sha", staleBranch.Spec.SHA)
+	}
+
+	// Remove default branch from the branches map so syncBranches won't try to delete it
+	delete(branches, defaultRef)
 
 	return nil
 }

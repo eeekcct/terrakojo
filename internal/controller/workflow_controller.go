@@ -179,16 +179,15 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err == nil {
 		// Job exists, update workflow status based on job status
 		phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
-		if !phaseChanged {
-			return ctrl.Result{}, nil
-		}
 		status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
 		err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
-			return ctrl.Result{}, err
+		if phaseChanged {
+			if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{}, nil
 	}
@@ -245,16 +244,15 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	workflow.Status.Jobs = append(workflow.Status.Jobs, job.Name)
 	phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
-	if !phaseChanged {
-		return ctrl.Result{}, nil
-	}
-	if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
-		return ctrl.Result{}, err
-	}
 	status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
 	err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if phaseChanged {
+		if err := r.updateWorkflowStatus(ctx, &workflow, phase); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return ctrl.Result{}, nil
