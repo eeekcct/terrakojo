@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -322,11 +324,10 @@ func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *t
 // createBranchResource creates a new Branch resource
 func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branch terrakojoiov1alpha1.BranchInfo) error {
 	short := shortSHA(branch.SHA)
-	// Add "default" prefix for default branch to avoid name collision with PR branches using same SHA
-	branchName := fmt.Sprintf("%s-%s", repo.Spec.Name, short)
-	if branch.Ref == repo.Spec.DefaultBranch {
-		branchName = fmt.Sprintf("%s-default-%s", repo.Spec.Name, short)
-	}
+	// Hash the ref to avoid collisions when different refs point to the same SHA
+	// and to keep names short (branch name will have workflow/job suffixes appended)
+	refHash := hashRef(branch.Ref)
+	branchName := fmt.Sprintf("%s-%s-%s", repo.Spec.Name, refHash, short)
 	newBranch := &terrakojoiov1alpha1.Branch{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      branchName,
@@ -413,6 +414,12 @@ func shortSHA(sha string) string {
 		return sha[:8]
 	}
 	return sha
+}
+
+// hashRef creates a short hash of the ref name to ensure uniqueness while keeping names short
+func hashRef(ref string) string {
+	h := sha256.Sum256([]byte(ref))
+	return hex.EncodeToString(h[:])[:8]
 }
 
 func indexByOwnerRepositoryUID(obj client.Object) []string {

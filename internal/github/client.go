@@ -116,10 +116,13 @@ func (c *Client) GetChangedFiles(owner, repo string, prNumber int) ([]string, er
 }
 
 func (c *Client) GetChangedFilesForCommit(owner, repo, sha string) ([]string, error) {
+	// Note: GetCommit does not support pagination. GitHub returns up to 3000 files in a single response.
+	// Files beyond 3000 are not included, but this is a GitHub API limitation.
 	commit, _, err := c.client.Repositories.GetCommit(c.ctx, owner, repo, sha, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get commit %s: %w", sha, err)
 	}
+
 	var files []string
 	for _, file := range commit.Files {
 		if file.Filename != nil {
