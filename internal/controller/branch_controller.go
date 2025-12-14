@@ -181,6 +181,15 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 	if len(changedFiles) == 0 {
+		log.Info("No changed files for Branch, cleaning up")
+		if err := r.cleanupRepositoryStatus(ctx, &branch); err != nil {
+			log.Error(err, "Failed to cleanup repository status for branch with no changed files")
+			return ctrl.Result{}, err
+		}
+		if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
+			log.Error(err, "Failed to delete branch with no changed files")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -204,7 +213,15 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	groups := matchTemplates(templates, changedFiles)
 	if len(groups) == 0 {
-		log.Info("No matching WorkflowTemplate found for Branch", "changedFiles", changedFiles)
+		log.Info("No matching WorkflowTemplate found for Branch, cleaning up")
+		if err := r.cleanupRepositoryStatus(ctx, &branch); err != nil {
+			log.Error(err, "Failed to cleanup repository status for branch with no matching templates")
+			return ctrl.Result{}, err
+		}
+		if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
+			log.Error(err, "Failed to delete branch with no matching templates")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
