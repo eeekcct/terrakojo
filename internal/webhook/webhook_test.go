@@ -485,4 +485,3 @@ func TestPRFromDefaultBranchDoesNotUpdateBranchList(t *testing.T) {
 	// Default branch should NOT be added to DefaultBranchCommits for PR open
 	require.Len(t, updated.Status.DefaultBranchCommits, 0)
 }
-
