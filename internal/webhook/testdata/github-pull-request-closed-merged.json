@@ -1,11 +1,18 @@
 {
-  "action": "synchronize",
-  "number": 42,
+  "action": "closed",
+  "number": 3,
   "pull_request": {
-    "number": 42,
+    "number": 3,
+    "state": "closed",
+    "merged": true,
+    "merge_commit_sha": "4444444444444444444444444444444444444444",
     "head": {
       "ref": "feature/auth",
       "sha": "3333333333333333333333333333333333333333"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }
   },
   "repository": {

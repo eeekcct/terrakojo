@@ -1,5 +1,5 @@
 {
-  "action": "opened",
+  "action": "synchronize",
   "number": 3,
   "pull_request": {
     "number": 3,
@@ -7,7 +7,7 @@
     "merged": false,
     "head": {
       "ref": "feature/auth",
-      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "sha": "3333333333333333333333333333333333333333"
     },
     "base": {
       "ref": "main",

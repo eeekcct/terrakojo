@@ -119,17 +119,30 @@ func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) convertWebhookInfoToBranchInfo(webhookInfo *ghpkg.WebhookInfo) *v1alpha1.BranchInfo {
 	// Only process push and pull request events
 	switch webhookInfo.EventType {
-	case ghpkg.EventTypePush, ghpkg.EventTypePR:
+	case ghpkg.EventTypePush:
 		branchInfo := &v1alpha1.BranchInfo{
 			Ref: webhookInfo.BranchName,
 			SHA: webhookInfo.CommitSHA,
 		}
+		return branchInfo
 
-		// Set PR number if applicable
+	case ghpkg.EventTypePR:
+		// If merged, treat as default-branch commit using merge_commit_sha and base ref
+		if webhookInfo.Merged {
+			return &v1alpha1.BranchInfo{
+				Ref: webhookInfo.BaseBranchName,
+				SHA: webhookInfo.MergeCommitSHA,
+			}
+		}
+
+		// Otherwise track PR head
+		branchInfo := &v1alpha1.BranchInfo{
+			Ref: webhookInfo.BranchName,
+			SHA: webhookInfo.CommitSHA,
+		}
 		if webhookInfo.PRNumber != nil {
 			branchInfo.PRNumber = *webhookInfo.PRNumber
 		}
-
 		return branchInfo
 
 	case ghpkg.EventTypePing:
@@ -181,7 +194,9 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 		changed := false
 
 		// Default branch (push/merge): enqueue commit to defaultBranchCommits.
-		if webhookInfo.EventType == ghpkg.EventTypePush && branchInfo.Ref == repo.Spec.DefaultBranch {
+		if (webhookInfo.EventType == ghpkg.EventTypePush ||
+			(webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == "closed" && webhookInfo.Merged)) &&
+			branchInfo.Ref == repo.Spec.DefaultBranch {
 			before := len(repo.Status.DefaultBranchCommits)
 			exists := false
 			for _, c := range repo.Status.DefaultBranchCommits {
@@ -232,11 +247,12 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 			}
 		}
 
-		// PR closed (merged/non-merged): remove branch entry from list; leave defaultBranchCommits untouched.
+		// PR closed (merged/non-merged): remove PR head branch entry from list; leave defaultBranchCommits untouched.
 		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == "closed" {
 			before := len(repo.Status.BranchList)
+			prHeadRef := webhookInfo.BranchName
 			repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
-				return b.Ref == branchInfo.Ref
+				return b.Ref == prHeadRef
 			})
 			if len(repo.Status.BranchList) != before {
 				changed = true

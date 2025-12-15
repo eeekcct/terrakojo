@@ -429,8 +429,8 @@ func TestPushFeatureBranchUpdatesBranchList(t *testing.T) {
 
 func TestPROpenSyncCloseLifecycle(t *testing.T) {
 	openBody := mustLoadPayload(t, "github-pull-request-opened-simple.json")
-	syncBody := mustLoadPayload(t, "github-pull-request-synchronize-payload.json")
-	closeBody := mustLoadPayload(t, "github-pull-request-closed-simple.json")
+	syncBody := mustLoadPayload(t, "github-pull-request-synchronize-simple.json")
+	closeBody := mustLoadPayload(t, "github-pull-request-closed-merged.json")
 
 	repo := baseRepo("main")
 	handler := newWebhookHandlerWithRepo(t, repo)
@@ -444,6 +444,7 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
 	require.Len(t, updated.Status.BranchList, 1)
 	require.Equal(t, "feature/auth", updated.Status.BranchList[0].Ref)
+	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", updated.Status.BranchList[0].SHA)
 
 	// synchronize: SHA should update
 	rr = httptest.NewRecorder()
@@ -461,4 +462,7 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 
 	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
 	require.Len(t, updated.Status.BranchList, 0)
+	require.Len(t, updated.Status.DefaultBranchCommits, 1)
+	require.Equal(t, "main", updated.Status.DefaultBranchCommits[0].Ref)
+	require.Equal(t, "4444444444444444444444444444444444444444", updated.Status.DefaultBranchCommits[0].SHA)
 }

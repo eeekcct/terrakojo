@@ -238,7 +238,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				log.Error(err, "Failed to generate random string for workflow name")
 				return ctrl.Result{}, err
 			}
-			wfName := fmt.Sprintf("%s-%s-%s", branch.Name, templateName, randomSuffix)
+			wfName := fmt.Sprintf("%s-%s", templateName, randomSuffix)
 
 			if err := r.Get(ctx, client.ObjectKey{Name: wfName, Namespace: branch.Namespace}, &terrakojoiov1alpha1.Workflow{}); err == nil {
 				// Workflow already exists, nothing to do
