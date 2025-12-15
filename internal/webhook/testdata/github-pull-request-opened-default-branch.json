@@ -10,7 +10,7 @@
       "sha": "dddddddddddddddddddddddddddddddddddddddd"
     },
     "base": {
-      "ref": "main",
+      "ref": "release/v1.0",
       "sha": "cccccccccccccccccccccccccccccccccccccccc"
     }
   },
