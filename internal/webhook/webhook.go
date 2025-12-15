@@ -180,7 +180,7 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 
 		changed := false
 
-		// Default branch (push/merge): enqueue commit; branchListは触らない。
+		// Default branch (push/merge): enqueue commit to defaultBranchCommits.
 		if webhookInfo.EventType == ghpkg.EventTypePush && branchInfo.Ref == repo.Spec.DefaultBranch {
 			before := len(repo.Status.DefaultBranchCommits)
 			exists := false
