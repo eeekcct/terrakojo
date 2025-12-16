@@ -1,0 +1,25 @@
+{
+  "action": "closed",
+  "number": 3,
+  "pull_request": {
+    "number": 3,
+    "state": "closed",
+    "merged": true,
+    "merge_commit_sha": "4444444444444444444444444444444444444444",
+    "head": {
+      "ref": "feature/auth",
+      "sha": "3333333333333333333333333333333333333333"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "repository": {
+    "name": "terrakojo",
+    "full_name": "eeekcct/terrakojo",
+    "owner": {
+      "login": "eeekcct"
+    }
+  }
+}

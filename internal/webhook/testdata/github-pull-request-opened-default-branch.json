@@ -1,0 +1,24 @@
+{
+  "action": "opened",
+  "number": 99,
+  "pull_request": {
+    "number": 99,
+    "state": "open",
+    "merged": false,
+    "head": {
+      "ref": "main",
+      "sha": "dddddddddddddddddddddddddddddddddddddddd"
+    },
+    "base": {
+      "ref": "release/v1.0",
+      "sha": "cccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "repository": {
+    "name": "terrakojo",
+    "full_name": "eeekcct/terrakojo",
+    "owner": {
+      "login": "eeekcct"
+    }
+  }
+}

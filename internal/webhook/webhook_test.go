@@ -2,14 +2,25 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/eeekcct/terrakojo/api/v1alpha1"
 	"github.com/eeekcct/terrakojo/internal/config"
+	"github.com/eeekcct/terrakojo/internal/github"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestWebhookHandlerRouting(t *testing.T) {
@@ -298,4 +309,179 @@ func TestNewHandler(t *testing.T) {
 	if handler.client == nil {
 		t.Log("Kubernetes client is nil (expected for tests)")
 	}
+}
+
+// ------------------------------------------------------------
+// Payload-driven tests
+// ------------------------------------------------------------
+
+const testWebhookSecret = "test-secret"
+
+func mustLoadPayload(t *testing.T, name string) []byte {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	b, err := os.ReadFile(path)
+	require.NoError(t, err, "load payload %s", name)
+	return b
+}
+
+func sign(secret string, body []byte) string {
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write(body)
+	return fmt.Sprintf("sha256=%x", h.Sum(nil))
+}
+
+func newWebhookHandlerWithRepo(t *testing.T, repo *v1alpha1.Repository) *Handler {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(repo).
+		WithObjects(repo).
+		Build()
+
+	cfg := &config.Config{WebhookGithubSecret: testWebhookSecret}
+	h, err := NewHandler(cfg, cl)
+	require.NoError(t, err)
+	return h
+}
+
+func baseRepo(defaultBranch string) *v1alpha1.Repository {
+	return &v1alpha1.Repository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "repo",
+			Namespace: "default",
+			Labels: map[string]string{
+				"terrakojo.io/owner":     "eeekcct",
+				"terrakojo.io/repo-name": "terrakojo",
+			},
+		},
+		Spec: v1alpha1.RepositorySpec{
+			Owner:         "eeekcct",
+			Name:          "terrakojo",
+			Type:          "github",
+			DefaultBranch: defaultBranch,
+			GitHubSecretRef: v1alpha1.GitHubSecretRef{
+				Name: "gh",
+			},
+		},
+	}
+}
+
+func makeRequest(t *testing.T, event string, body []byte) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest("POST", "/webhook", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", event)
+	req.Header.Set("X-GitHub-Delivery", "test-delivery")
+	req.Header.Set("X-Hub-Signature-256", sign(testWebhookSecret, body))
+	return req
+}
+
+func TestPushDefaultBranchEnqueuesCommit(t *testing.T) {
+	body := mustLoadPayload(t, "github-push-default-branch.json")
+	repo := baseRepo("main")
+	handler := newWebhookHandlerWithRepo(t, repo)
+
+	req := makeRequest(t, string(github.EventTypePush), body)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	// verify status updated
+	cl := handler.client
+	var updated v1alpha1.Repository
+	require.NoError(t, cl.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
+	require.Len(t, updated.Status.DefaultBranchCommits, 1)
+	require.Equal(t, "main", updated.Status.DefaultBranchCommits[0].Ref)
+	require.Equal(t, "1111111111111111111111111111111111111111", updated.Status.DefaultBranchCommits[0].SHA)
+	// branchList untouched
+	require.Len(t, updated.Status.BranchList, 0)
+}
+
+func TestPushFeatureBranchUpdatesBranchList(t *testing.T) {
+	body := mustLoadPayload(t, "github-push-feature-branch.json")
+	repo := baseRepo("main")
+	// Pretend we already had an older SHA
+	repo.Status.BranchList = []v1alpha1.BranchInfo{{
+		Ref: "feature/add-api",
+		SHA: "oldoldoldoldoldoldoldoldoldoldoldoldoldoldol",
+	}}
+	handler := newWebhookHandlerWithRepo(t, repo)
+
+	req := makeRequest(t, string(github.EventTypePush), body)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var updated v1alpha1.Repository
+	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
+	require.Len(t, updated.Status.BranchList, 1)
+	info := updated.Status.BranchList[0]
+	require.Equal(t, "feature/add-api", info.Ref)
+	require.Equal(t, "2222222222222222222222222222222222222222", info.SHA)
+}
+
+func TestPROpenSyncCloseLifecycle(t *testing.T) {
+	openBody := mustLoadPayload(t, "github-pull-request-opened-simple.json")
+	syncBody := mustLoadPayload(t, "github-pull-request-synchronize-simple.json")
+	closeBody := mustLoadPayload(t, "github-pull-request-closed-merged.json")
+
+	repo := baseRepo("main")
+	handler := newWebhookHandlerWithRepo(t, repo)
+
+	// opened
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeRequest(t, string(github.EventTypePR), openBody))
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var updated v1alpha1.Repository
+	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
+	require.Len(t, updated.Status.BranchList, 1)
+	require.Equal(t, "feature/auth", updated.Status.BranchList[0].Ref)
+	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", updated.Status.BranchList[0].SHA)
+
+	// synchronize: SHA should update
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeRequest(t, string(github.EventTypePR), syncBody))
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
+	require.Len(t, updated.Status.BranchList, 1)
+	require.Equal(t, "3333333333333333333333333333333333333333", updated.Status.BranchList[0].SHA)
+
+	// closed: entry removed
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeRequest(t, string(github.EventTypePR), closeBody))
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
+	require.Len(t, updated.Status.BranchList, 0)
+	require.Len(t, updated.Status.DefaultBranchCommits, 1)
+	require.Equal(t, "main", updated.Status.DefaultBranchCommits[0].Ref)
+	require.Equal(t, "4444444444444444444444444444444444444444", updated.Status.DefaultBranchCommits[0].SHA)
+}
+
+func TestPRFromDefaultBranchDoesNotUpdateBranchList(t *testing.T) {
+	openBody := mustLoadPayload(t, "github-pull-request-opened-default-branch.json")
+
+	repo := baseRepo("main")
+	handler := newWebhookHandlerWithRepo(t, repo)
+
+	// opened - PR from default branch (edge case)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeRequest(t, string(github.EventTypePR), openBody))
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var updated v1alpha1.Repository
+	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
+	// Default branch should NOT be added to BranchList
+	require.Len(t, updated.Status.BranchList, 0)
+	// Default branch should NOT be added to DefaultBranchCommits for PR open
+	require.Len(t, updated.Status.DefaultBranchCommits, 0)
 }

@@ -1,0 +1,24 @@
+{
+  "action": "opened",
+  "number": 3,
+  "pull_request": {
+    "number": 3,
+    "state": "open",
+    "merged": false,
+    "head": {
+      "ref": "feature/auth",
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "repository": {
+    "name": "terrakojo",
+    "full_name": "eeekcct/terrakojo",
+    "owner": {
+      "login": "eeekcct"
+    }
+  }
+}

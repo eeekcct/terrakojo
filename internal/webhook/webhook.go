@@ -119,17 +119,30 @@ func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) convertWebhookInfoToBranchInfo(webhookInfo *ghpkg.WebhookInfo) *v1alpha1.BranchInfo {
 	// Only process push and pull request events
 	switch webhookInfo.EventType {
-	case ghpkg.EventTypePush, ghpkg.EventTypePR:
+	case ghpkg.EventTypePush:
 		branchInfo := &v1alpha1.BranchInfo{
 			Ref: webhookInfo.BranchName,
 			SHA: webhookInfo.CommitSHA,
 		}
+		return branchInfo
 
-		// Set PR number if applicable
+	case ghpkg.EventTypePR:
+		// If merged, treat as default-branch commit using merge_commit_sha and base ref
+		if webhookInfo.Merged {
+			return &v1alpha1.BranchInfo{
+				Ref: webhookInfo.BaseBranchName,
+				SHA: webhookInfo.MergeCommitSHA,
+			}
+		}
+
+		// Otherwise track PR head
+		branchInfo := &v1alpha1.BranchInfo{
+			Ref: webhookInfo.BranchName,
+			SHA: webhookInfo.CommitSHA,
+		}
 		if webhookInfo.PRNumber != nil {
 			branchInfo.PRNumber = *webhookInfo.PRNumber
 		}
-
 		return branchInfo
 
 	case ghpkg.EventTypePing:
@@ -139,6 +152,23 @@ func (h *Handler) convertWebhookInfoToBranchInfo(webhookInfo *ghpkg.WebhookInfo)
 		log.Printf("Unhandled webhook event type: %s", webhookInfo.EventType)
 		return nil
 	}
+}
+
+// updateBranchListWithLatestSHA updates the BranchList by replacing the entry for the given ref with the new SHA.
+// Returns the updated BranchList and true if the BranchList was modified.
+func updateBranchListWithLatestSHA(branchList []v1alpha1.BranchInfo, branchInfo v1alpha1.BranchInfo) ([]v1alpha1.BranchInfo, bool) {
+	before := len(branchList)
+	oldSHA := ""
+	branchList = slices.DeleteFunc(branchList, func(b v1alpha1.BranchInfo) bool {
+		if b.Ref == branchInfo.Ref {
+			oldSHA = b.SHA
+			return true
+		}
+		return false
+	})
+	branchList = append(branchList, branchInfo)
+	changed := len(branchList) != before || oldSHA != branchInfo.SHA
+	return branchList, changed
 }
 
 // updateRepositoryBranchList updates the Repository's BranchList with the new branch information
@@ -180,8 +210,10 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 
 		changed := false
 
-		// Default branch queue: append if this SHA is not already present.
-		if branchInfo.Ref == repo.Spec.DefaultBranch {
+		// Default branch (push/merge): enqueue commit to defaultBranchCommits.
+		if (webhookInfo.EventType == ghpkg.EventTypePush ||
+			(webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == "closed" && webhookInfo.Merged)) &&
+			branchInfo.Ref == repo.Spec.DefaultBranch {
 			before := len(repo.Status.DefaultBranchCommits)
 			exists := false
 			for _, c := range repo.Status.DefaultBranchCommits {
@@ -198,21 +230,39 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 			}
 		}
 
-		// BranchList: only track non-default branches; default branch is managed via DefaultBranchCommits queue.
-		if branchInfo.Ref != repo.Spec.DefaultBranch {
-			// Replace existing entry for the same ref (keep only latest SHA per branch).
-			before := len(repo.Status.BranchList)
-			oldSHA := ""
-			repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
-				if b.Ref == branchInfo.Ref {
-					oldSHA = b.SHA
-					return true
-				}
-				return false
-			})
-			repo.Status.BranchList = append(repo.Status.BranchList, branchInfo)
-			if len(repo.Status.BranchList) != before || oldSHA != branchInfo.SHA {
+		// Push to non-default branch: keep latest SHA per ref in branchList.
+		if webhookInfo.EventType == ghpkg.EventTypePush && branchInfo.Ref != repo.Spec.DefaultBranch {
+			var branchChanged bool
+			repo.Status.BranchList, branchChanged = updateBranchListWithLatestSHA(repo.Status.BranchList, branchInfo)
+			if branchChanged {
 				changed = true
+			}
+		}
+
+		// PR open/synchronize: replace latest SHA for non-default branch.
+		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action != "closed" {
+			// Only update BranchList for non-default branches
+			if branchInfo.Ref != repo.Spec.DefaultBranch {
+				var branchChanged bool
+				repo.Status.BranchList, branchChanged = updateBranchListWithLatestSHA(repo.Status.BranchList, branchInfo)
+				if branchChanged {
+					changed = true
+				}
+			}
+		}
+
+		// PR closed (merged/non-merged): remove PR head branch entry from list; leave defaultBranchCommits untouched.
+		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == "closed" {
+			prHeadRef := webhookInfo.BranchName
+			// Do not attempt to remove the default branch from BranchList
+			if prHeadRef != repo.Spec.DefaultBranch {
+				before := len(repo.Status.BranchList)
+				repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
+					return b.Ref == prHeadRef
+				})
+				if len(repo.Status.BranchList) != before {
+					changed = true
+				}
 			}
 		}
 
