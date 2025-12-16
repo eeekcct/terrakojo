@@ -466,3 +466,22 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 	require.Equal(t, "main", updated.Status.DefaultBranchCommits[0].Ref)
 	require.Equal(t, "4444444444444444444444444444444444444444", updated.Status.DefaultBranchCommits[0].SHA)
 }
+
+func TestPRFromDefaultBranchDoesNotUpdateBranchList(t *testing.T) {
+	openBody := mustLoadPayload(t, "github-pull-request-opened-default-branch.json")
+
+	repo := baseRepo("main")
+	handler := newWebhookHandlerWithRepo(t, repo)
+
+	// opened - PR from default branch (edge case)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeRequest(t, string(github.EventTypePR), openBody))
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var updated v1alpha1.Repository
+	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
+	// Default branch should NOT be added to BranchList
+	require.Len(t, updated.Status.BranchList, 0)
+	// Default branch should NOT be added to DefaultBranchCommits for PR open
+	require.Len(t, updated.Status.DefaultBranchCommits, 0)
+}
