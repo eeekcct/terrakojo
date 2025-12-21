@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -197,7 +198,6 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	checkRunName = fmt.Sprintf("%s(%s)", template.Spec.DisplayName, workflow.Spec.Path)
-	workflow.Status.CheckRunName = checkRunName
 
 	// Create CheckRun
 	checkRun, err := ghClient.CreateCheckRun(owner, repo, sha, checkRunName)
@@ -210,8 +210,10 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	checkRunID = checkRun.GetID()
-	workflow.Status.CheckRunID = int(checkRunID)
-	if err := r.Status().Update(ctx, &workflow); err != nil {
+	if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+		latest.Status.CheckRunName = checkRunName
+		latest.Status.CheckRunID = int(checkRunID)
+	}); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			// Workflow was deleted, ignore this reconcile
 			log.Info("Workflow was deleted during reconcile, ignoring",
@@ -378,13 +380,21 @@ func (r *WorkflowReconciler) determineWorkflowPhase(workflow *terrakojoiov1alpha
 }
 
 func (r *WorkflowReconciler) updateWorkflowStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) error {
-	workflow.Status.Phase = string(phase)
-	r.setCondition(workflow, "JobStatus", metav1.ConditionTrue, string(phase), fmt.Sprintf("Job is in %s state", phase))
+	return r.updateWorkflowStatusWithRetry(ctx, workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+		latest.Status.Phase = string(phase)
+		r.setCondition(latest, "JobStatus", metav1.ConditionTrue, string(phase), fmt.Sprintf("Job is in %s state", phase))
+	})
+}
 
-	if err := r.Status().Update(ctx, workflow); err != nil {
-		return err
-	}
-	return nil
+func (r *WorkflowReconciler) updateWorkflowStatusWithRetry(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, mutate func(*terrakojoiov1alpha1.Workflow)) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var latest terrakojoiov1alpha1.Workflow
+		if err := r.Get(ctx, client.ObjectKeyFromObject(workflow), &latest); err != nil {
+			return err
+		}
+		mutate(&latest)
+		return r.Status().Update(ctx, &latest)
+	})
 }
 
 func (r *WorkflowReconciler) checkRunStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) (string, string) {
