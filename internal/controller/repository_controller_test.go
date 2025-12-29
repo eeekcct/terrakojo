@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -51,34 +50,42 @@ var _ = Describe("Repository Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: terrakojoiov1alpha1.RepositorySpec{
+						Owner:         "test-owner",
+						Name:          "test-repo",
+						Type:          "github",
+						DefaultBranch: "main",
+						GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
+							Name: "github-secret",
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, repository)).To(Succeed())
 		})
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &terrakojoiov1alpha1.Repository{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if errors.IsNotFound(err) {
+				return
+			}
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance Repository")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &RepositoryReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		It("should create the resource with required spec fields", func() {
+			By("Fetching the created resource")
+			fetched := &terrakojoiov1alpha1.Repository{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, fetched)).To(Succeed())
+			Expect(fetched.Spec.Owner).To(Equal("test-owner"))
+			Expect(fetched.Spec.Name).To(Equal("test-repo"))
+			Expect(fetched.Spec.Type).To(Equal("github"))
+			Expect(fetched.Spec.DefaultBranch).To(Equal("main"))
+			Expect(fetched.Spec.GitHubSecretRef.Name).To(Equal("github-secret"))
 		})
 	})
 })

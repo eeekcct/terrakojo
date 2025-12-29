@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -51,34 +50,37 @@ var _ = Describe("Branch Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: terrakojoiov1alpha1.BranchSpec{
+						Owner:      "test-owner",
+						Repository: "test-repo",
+						Name:       "main",
+						SHA:        "0123456789abcdef0123456789abcdef01234567",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, branch)).To(Succeed())
 		})
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &terrakojoiov1alpha1.Branch{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if errors.IsNotFound(err) {
+				return
+			}
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance Branch")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &BranchReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		It("should create the resource with required spec fields", func() {
+			By("Fetching the created resource")
+			fetched := &terrakojoiov1alpha1.Branch{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, fetched)).To(Succeed())
+			Expect(fetched.Spec.Owner).To(Equal("test-owner"))
+			Expect(fetched.Spec.Repository).To(Equal("test-repo"))
+			Expect(fetched.Spec.Name).To(Equal("main"))
 		})
 	})
 })

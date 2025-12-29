@@ -18,12 +18,12 @@ package controller
 
 import (
 	"context"
+	"sync/atomic"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -51,34 +51,72 @@ var _ = Describe("Workflow Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: terrakojoiov1alpha1.WorkflowSpec{
+						Owner:      "test-owner",
+						Repository: "test-repo",
+						Branch:     "main",
+						SHA:        "0123456789abcdef0123456789abcdef01234567",
+						Template:   "test-template",
+						Path:       "infra/path",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, workflow)).To(Succeed())
 		})
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &terrakojoiov1alpha1.Workflow{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if errors.IsNotFound(err) {
+				return
+			}
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance Workflow")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+		It("should update workflow status", func() {
+			By("Updating workflow status")
 			controllerReconciler := &WorkflowReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			err := controllerReconciler.updateWorkflowStatus(ctx, workflow, WorkflowPhaseRunning)
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &terrakojoiov1alpha1.Workflow{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(string(WorkflowPhaseRunning)))
+			Expect(updated.Status.Conditions).NotTo(BeEmpty())
+		})
+
+		It("should retry status updates on conflict", func() {
+			By("Updating workflow status with a forced conflict")
+			controllerReconciler := &WorkflowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			var attempts int32
+			var conflictInjected int32
+			err := controllerReconciler.updateWorkflowStatusWithRetry(ctx, workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+				atomic.AddInt32(&attempts, 1)
+				if atomic.CompareAndSwapInt32(&conflictInjected, 0, 1) {
+					other := latest.DeepCopy()
+					other.Status.CheckRunName = "conflict"
+					Expect(controllerReconciler.Status().Update(ctx, other)).To(Succeed())
+				}
+				latest.Status.Phase = string(WorkflowPhaseRunning)
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			Expect(attempts).To(BeNumerically(">=", 2))
+
+			updated := &terrakojoiov1alpha1.Workflow{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(string(WorkflowPhaseRunning)))
 		})
 	})
 })
