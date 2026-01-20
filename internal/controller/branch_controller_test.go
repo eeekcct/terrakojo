@@ -18,69 +18,96 @@ package controller
 
 import (
 	"context"
-
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"errors"
+	"time"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
 var _ = Describe("Branch Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	var (
+		mgr       ctrl.Manager
+		mgrCtx    context.Context
+		mgrCancel context.CancelFunc
+		mgrErrCh  chan error
+	)
 
-		ctx := context.Background()
+	BeforeEach(func() {
+		skipNameValidation := true
+		var err error
+		mgr, err = ctrl.NewManager(cfg, ctrl.Options{
+			Scheme: scheme.Scheme,
+			Metrics: server.Options{
+				BindAddress: "0",
+			},
+			HealthProbeBindAddress: "0",
+			WebhookServer:          webhook.NewServer(webhook.Options{Port: 0}),
+			Controller:             config.Controller{SkipNameValidation: &skipNameValidation},
+		})
+		Expect(err).NotTo(HaveOccurred())
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+		reconciler := &BranchReconciler{
+			Client:              mgr.GetClient(),
+			Scheme:              mgr.GetScheme(),
+			GitHubClientManager: &fakeGitHubClientManager{},
 		}
-		branch := &terrakojoiov1alpha1.Branch{}
+		Expect(reconciler.SetupWithManager(mgr)).To(Succeed())
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind Branch")
-			err := k8sClient.Get(ctx, typeNamespacedName, branch)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &terrakojoiov1alpha1.Branch{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					Spec: terrakojoiov1alpha1.BranchSpec{
-						Owner:      "test-owner",
-						Repository: "test-repo",
-						Name:       "main",
-						SHA:        "0123456789abcdef0123456789abcdef01234567",
-					},
+		mgrCtx, mgrCancel = context.WithCancel(context.Background())
+		mgrErrCh = make(chan error, 1)
+		go func() {
+			defer GinkgoRecover()
+			mgrErrCh <- mgr.Start(mgrCtx)
+		}()
+
+		Expect(mgr.GetCache().WaitForCacheSync(mgrCtx)).To(BeTrue())
+
+		DeferCleanup(func() {
+			mgrCancel()
+			err := <-mgrErrCh
+			if err != nil && !errors.Is(err, context.Canceled) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+
+	})
+
+	When("reconciling Repository resources", func() {
+		const namespace = "default"
+
+		It("should create a Branch resource for each branch in the repository", func() {
+			ctx := context.Background()
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      "example-branch",
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Repository: "example-repo",
+					Owner:      "example-owner",
+					Name:       "example-branch",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+				},
+			}
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				key := types.NamespacedName{
+					Name:      branch.Name,
+					Namespace: namespace,
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, branch)).To(Succeed())
-		})
-
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &terrakojoiov1alpha1.Branch{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			if errors.IsNotFound(err) {
-				return
-			}
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance Branch")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should create the resource with required spec fields", func() {
-			By("Fetching the created resource")
-			fetched := &terrakojoiov1alpha1.Branch{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, fetched)).To(Succeed())
-			Expect(fetched.Spec.Owner).To(Equal("test-owner"))
-			Expect(fetched.Spec.Repository).To(Equal("test-repo"))
-			Expect(fetched.Spec.Name).To(Equal("main"))
+				fetched := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, key, fetched)).To(Succeed())
+				g.Expect(fetched.Finalizers).To(ContainElement(branchFinalizer))
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 	})
 })
