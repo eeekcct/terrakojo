@@ -19,12 +19,14 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -36,6 +38,22 @@ import (
 
 	gh "github.com/eeekcct/terrakojo/internal/github"
 )
+
+var nameCounter uint64
+
+func uniqueName(base string) string {
+	return fmt.Sprintf("%s-%d-%d", base, GinkgoParallelProcess(), atomic.AddUint64(&nameCounter, 1))
+}
+
+func createTestNamespace(ctx context.Context) string {
+	ns := &corev1.Namespace{
+		ObjectMeta: ctrl.ObjectMeta{
+			Name: uniqueName("ns"),
+		},
+	}
+	Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+	return ns.Name
+}
 
 var _ = Describe("Branch Controller", func() {
 	var (
@@ -88,21 +106,23 @@ var _ = Describe("Branch Controller", func() {
 	})
 
 	When("reconciling Branch resources", func() {
-		const namespace = "default"
-
 		It("add finalizer on creation", func() {
 			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			branchName := uniqueName("branch-finalizer")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-branch-finalizer",
+					Name:      branchName,
 					Namespace: namespace,
 					Annotations: map[string]string{
 						"terrakojo.io/last-sha": "0123456789abcdef0123456789abcdef01234567",
 					},
 				},
 				Spec: terrakojoiov1alpha1.BranchSpec{
-					Repository: "example-repo",
-					Owner:      "example-owner",
+					Repository: repoName,
+					Owner:      owner,
 					Name:       "feature/finalizer",
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
@@ -120,9 +140,14 @@ var _ = Describe("Branch Controller", func() {
 
 		It("requeues on deletion when workflows remain", func() {
 			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			branchName := uniqueName("branch-delete-requeue")
+			workflowName := uniqueName("workflow-remains")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-branch-delete-requeue",
+					Name:      branchName,
 					Namespace: namespace,
 					Finalizers: []string{
 						branchFinalizer,
@@ -132,8 +157,8 @@ var _ = Describe("Branch Controller", func() {
 					},
 				},
 				Spec: terrakojoiov1alpha1.BranchSpec{
-					Repository: "example-repo",
-					Owner:      "example-owner",
+					Repository: repoName,
+					Owner:      owner,
 					Name:       "feature/requeue",
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
@@ -145,7 +170,7 @@ var _ = Describe("Branch Controller", func() {
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-workflow-remains",
+					Name:      workflowName,
 					Namespace: namespace,
 					Finalizers: []string{
 						workflowFinalizer,
@@ -175,9 +200,13 @@ var _ = Describe("Branch Controller", func() {
 
 		It("removes finalizer when deleting and no workflows remain", func() {
 			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			branchName := uniqueName("branch-delete-clean")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-branch-delete-clean",
+					Name:      branchName,
 					Namespace: namespace,
 					Finalizers: []string{
 						branchFinalizer,
@@ -187,8 +216,8 @@ var _ = Describe("Branch Controller", func() {
 					},
 				},
 				Spec: terrakojoiov1alpha1.BranchSpec{
-					Repository: "example-repo",
-					Owner:      "example-owner",
+					Repository: repoName,
+					Owner:      owner,
 					Name:       "feature/cleanup",
 					SHA:        "abcdef0123456789abcdef0123456789abcdef01",
 				},
@@ -204,18 +233,25 @@ var _ = Describe("Branch Controller", func() {
 
 		It("deletes branch when all workflows completed", func() {
 			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
+			repoResourceName := uniqueName("repo-cleanup")
+			branchName := uniqueName("branch-completed")
+			workflowName := uniqueName("workflow-completed")
+			branchRef := "feature/completed"
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-repo-cleanup",
+					Name:      repoResourceName,
 					Namespace: namespace,
 					Labels: map[string]string{
-						"terrakojo.io/owner":     "example-owner",
-						"terrakojo.io/repo-name": "example-repo",
+						"terrakojo.io/owner":     owner,
+						"terrakojo.io/repo-name": repoName,
 					},
 				},
 				Spec: terrakojoiov1alpha1.RepositorySpec{
-					Owner:         "example-owner",
-					Name:          "example-repo",
+					Owner:         owner,
+					Name:          repoName,
 					Type:          "github",
 					DefaultBranch: "main",
 					GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
@@ -229,7 +265,7 @@ var _ = Describe("Branch Controller", func() {
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(repo), createdRepo)).To(Succeed())
 			createdRepo.Status.BranchList = []terrakojoiov1alpha1.BranchInfo{
 				{
-					Ref: "feature/completed",
+					Ref: branchRef,
 					SHA: "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
@@ -237,7 +273,7 @@ var _ = Describe("Branch Controller", func() {
 
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-branch-completed",
+					Name:      branchName,
 					Namespace: namespace,
 					Finalizers: []string{
 						branchFinalizer,
@@ -247,9 +283,9 @@ var _ = Describe("Branch Controller", func() {
 					},
 				},
 				Spec: terrakojoiov1alpha1.BranchSpec{
-					Repository: "example-repo",
-					Owner:      "example-owner",
-					Name:       "feature/completed",
+					Repository: repoName,
+					Owner:      owner,
+					Name:       branchRef,
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
@@ -260,7 +296,7 @@ var _ = Describe("Branch Controller", func() {
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-workflow-completed",
+					Name:      workflowName,
 					Namespace: namespace,
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
@@ -305,9 +341,15 @@ var _ = Describe("Branch Controller", func() {
 			}
 
 			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			tfTemplateName := uniqueName("tf-workflow-template")
+			mdTemplateName := uniqueName("md-workflow-template")
+			branchName := uniqueName("branch-workflow")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
 			tfTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "tf-workflow-template",
+					Name:      tfTemplateName,
 					Namespace: namespace,
 				},
 				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
@@ -326,7 +368,7 @@ var _ = Describe("Branch Controller", func() {
 			}
 			mdTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "md-workflow-template",
+					Name:      mdTemplateName,
 					Namespace: namespace,
 				},
 				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
@@ -349,12 +391,12 @@ var _ = Describe("Branch Controller", func() {
 
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-branch-workflow",
+					Name:      branchName,
 					Namespace: namespace,
 				},
 				Spec: terrakojoiov1alpha1.BranchSpec{
-					Repository: "example-repo",
-					Owner:      "example-owner",
+					Repository: repoName,
+					Owner:      owner,
 					Name:       "feature/workflow",
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
@@ -386,16 +428,100 @@ var _ = Describe("Branch Controller", func() {
 					g.Expect(wf.Spec.Owner).To(Equal(branch.Spec.Owner))
 					g.Expect(wf.Spec.Repository).To(Equal(branch.Spec.Repository))
 					g.Expect(wf.Spec.Template).To(SatisfyAny(
-						Equal("tf-workflow-template"),
-						Equal("md-workflow-template"),
+						Equal(tfTemplateName),
+						Equal(mdTemplateName),
 					))
-					if wf.Spec.Template == "tf-workflow-template" {
+					if wf.Spec.Template == tfTemplateName {
 						g.Expect(wf.Spec.Path).To(Equal("infrastructure/app"))
 					}
-					if wf.Spec.Template == "md-workflow-template" {
+					if wf.Spec.Template == mdTemplateName {
 						g.Expect(wf.Spec.Path).To(Equal("docs"))
 					}
 				}
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+		})
+
+		It("recreates Workflow resources if chaged branch SHA", func() {
+			var getChangedFilesCalled atomic.Bool
+			ghManager.GetClientForBranchFunc = func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+						getChangedFilesCalled.Store(true)
+						return []string{"infrastructure/app/main.tf"}, nil
+					},
+				}, nil
+			}
+
+			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			templateName := uniqueName("tf-workflow-template-recreate")
+			branchName := uniqueName("branch-recreate-workflow")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
+			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      templateName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "tf-test",
+					Match: terrakojoiov1alpha1.WorkflowMatch{
+						Paths: []string{"infrastructure/**/*.tf"},
+					},
+					Steps: []terrakojoiov1alpha1.WorkflowStep{
+						{
+							Name:    "plan",
+							Image:   "hashicorp/terraform:latest",
+							Command: []string{"echo", "Planning..."},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
+
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      branchName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"terrakojo.io/last-sha": "0123456789abcdef0123456789abcdef01234567",
+					},
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Repository: repoName,
+					Owner:      owner,
+					Name:       "feature/recreate-workflow",
+					SHA:        "0123456789abcdef0123456789abcdef01234568",
+				},
+			}
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+
+			Eventually(getChangedFilesCalled.Load).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
+
+			Eventually(func(g Gomega) {
+				key := client.ObjectKeyFromObject(branch)
+				fetched := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, key, fetched)).To(Succeed())
+				g.Expect(fetched.Annotations).To(HaveKeyWithValue("terrakojo.io/last-sha", branch.Spec.SHA))
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+
+			workflowList := &terrakojoiov1alpha1.WorkflowList{}
+			Eventually(func(g Gomega) {
+				fetchedBranch := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetchedBranch)).To(Succeed())
+				g.Expect(k8sClient.List(
+					ctx,
+					workflowList,
+					client.InNamespace(namespace),
+					client.MatchingLabels{"terrakojo.io/owner-uid": string(fetchedBranch.UID)},
+				)).To(Succeed())
+				g.Expect(workflowList.Items).To(HaveLen(1))
+
+				wf := workflowList.Items[0]
+				g.Expect(wf.Labels).To(HaveKeyWithValue("terrakojo.io/owner-uid", string(fetchedBranch.UID)))
+				g.Expect(wf.Spec.Branch).To(Equal(branch.Name))
+				g.Expect(wf.Spec.Owner).To(Equal(branch.Spec.Owner))
+				g.Expect(wf.Spec.Repository).To(Equal(branch.Spec.Repository))
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 
@@ -416,14 +542,18 @@ var _ = Describe("Branch Controller", func() {
 			}
 
 			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			branchName := uniqueName("branch-pr")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      "example-branch",
+					Name:      branchName,
 					Namespace: namespace,
 				},
 				Spec: terrakojoiov1alpha1.BranchSpec{
-					Repository: "example-repo",
-					Owner:      "example-owner",
+					Repository: repoName,
+					Owner:      owner,
 					Name:       "feature/pr",
 					PRNumber:   123,
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
@@ -437,6 +567,62 @@ var _ = Describe("Branch Controller", func() {
 			Eventually(func() bool {
 				key := client.ObjectKeyFromObject(branch)
 				err := k8sClient.Get(ctx, key, &terrakojoiov1alpha1.Branch{})
+				return apierrors.IsNotFound(err)
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
+		})
+
+		It("no matching WorkflowTemplates results in no Workflows created", func() {
+			ghManager.GetClientForBranchFunc = func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+						return []string{"some/random/file.txt"}, nil
+					},
+				}, nil
+			}
+
+			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			templateName := uniqueName("tf-workflow-template")
+			branchName := uniqueName("branch-no-workflow")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
+			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      templateName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "tf-test",
+					Match: terrakojoiov1alpha1.WorkflowMatch{
+						Paths: []string{"infrastructure/**/*.tf"},
+					},
+					Steps: []terrakojoiov1alpha1.WorkflowStep{
+						{
+							Name:    "plan",
+							Image:   "hashicorp/terraform:latest",
+							Command: []string{"echo", "Planning..."},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
+
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      branchName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Repository: repoName,
+					Owner:      owner,
+					Name:       "feature/no-workflow",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+				},
+			}
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), &terrakojoiov1alpha1.Branch{})
 				return apierrors.IsNotFound(err)
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
 		})
