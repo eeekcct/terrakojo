@@ -28,9 +28,13 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -53,6 +57,64 @@ func createTestNamespace(ctx context.Context) string {
 	}
 	Expect(k8sClient.Create(ctx, ns)).To(Succeed())
 	return ns.Name
+}
+
+func newBranchTestScheme() *runtime.Scheme {
+	scheme := runtime.NewScheme()
+	Expect(terrakojoiov1alpha1.AddToScheme(scheme)).To(Succeed())
+	return scheme
+}
+
+func newBranchFakeClient(scheme *runtime.Scheme, objs ...client.Object) client.Client {
+	builder := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithIndex(&terrakojoiov1alpha1.Workflow{}, "metadata.ownerReferences.uid", indexByOwnerBranchUID)
+	if len(objs) > 0 {
+		builder.WithObjects(objs...)
+	}
+	return builder.Build()
+}
+
+func newErrorTestBranch() *terrakojoiov1alpha1.Branch {
+	return &terrakojoiov1alpha1.Branch{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "branch-error-test",
+			Namespace:  "default",
+			Finalizers: []string{branchFinalizer},
+		},
+		Spec: terrakojoiov1alpha1.BranchSpec{
+			Repository: "repo",
+			Owner:      "owner",
+			Name:       "feature/error",
+			SHA:        "0123456789abcdef0123456789abcdef01234567",
+		},
+	}
+}
+
+type listWorkflowTemplateErrorClient struct {
+	client.Client
+	err error
+}
+
+func (c *listWorkflowTemplateErrorClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	switch list.(type) {
+	case *terrakojoiov1alpha1.WorkflowTemplateList:
+		return c.err
+	default:
+		return c.Client.List(ctx, list, opts...)
+	}
+}
+
+type deleteWorkflowErrorClient struct {
+	client.Client
+	err error
+}
+
+func (c *deleteWorkflowErrorClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if _, ok := obj.(*terrakojoiov1alpha1.Workflow); ok {
+		return c.err
+	}
+	return c.Client.Delete(ctx, obj, opts...)
 }
 
 var _ = Describe("Branch Controller", func() {
@@ -626,5 +688,143 @@ var _ = Describe("Branch Controller", func() {
 				return apierrors.IsNotFound(err)
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
 		})
+	})
+
+	When("reconciling Branch resources (error paths)", func() {
+		type setupResult struct {
+			reconciler *BranchReconciler
+			request    ctrl.Request
+		}
+
+		makeRequest := func(branch *terrakojoiov1alpha1.Branch) ctrl.Request {
+			return ctrl.Request{NamespacedName: types.NamespacedName{Name: branch.Name, Namespace: branch.Namespace}}
+		}
+
+		DescribeTable("returns an error",
+			func(setup func() setupResult, expectedSubstring string) {
+				result := setup()
+				_, err := result.reconciler.Reconcile(context.Background(), result.request)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(expectedSubstring))
+			},
+			Entry("fails when listing workflows errors", func() setupResult {
+				scheme := newBranchTestScheme()
+				branch := newErrorTestBranch()
+				baseClient := newBranchFakeClient(scheme, branch)
+				reconciler := &BranchReconciler{
+					Client:              &listErrorClient{Client: baseClient, err: fmt.Errorf("list failed")},
+					Scheme:              scheme,
+					GitHubClientManager: &fakeGitHubClientManager{},
+				}
+				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
+			}, "list failed"),
+			Entry("fails when GitHubClientManager is nil", func() setupResult {
+				scheme := newBranchTestScheme()
+				branch := newErrorTestBranch()
+				client := newBranchFakeClient(scheme, branch)
+				reconciler := &BranchReconciler{
+					Client:              client,
+					Scheme:              scheme,
+					GitHubClientManager: nil,
+				}
+				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
+			}, "GitHubClientManager not initialized"),
+			Entry("fails when GetClientForBranch returns error", func() setupResult {
+				scheme := newBranchTestScheme()
+				branch := newErrorTestBranch()
+				client := newBranchFakeClient(scheme, branch)
+				ghManager := &fakeGitHubClientManager{
+					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+						return nil, fmt.Errorf("gh client error")
+					},
+				}
+				reconciler := &BranchReconciler{
+					Client:              client,
+					Scheme:              scheme,
+					GitHubClientManager: ghManager,
+				}
+				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
+			}, "gh client error"),
+			Entry("fails when commit changed files returns error", func() setupResult {
+				scheme := newBranchTestScheme()
+				branch := newErrorTestBranch()
+				client := newBranchFakeClient(scheme, branch)
+				ghManager := &fakeGitHubClientManager{
+					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+						return &fakeGitHubClient{
+							GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+								return nil, fmt.Errorf("changed files error")
+							},
+						}, nil
+					},
+				}
+				reconciler := &BranchReconciler{
+					Client:              client,
+					Scheme:              scheme,
+					GitHubClientManager: ghManager,
+				}
+				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
+			}, "changed files error"),
+			Entry("fails when listing workflow templates returns error", func() setupResult {
+				scheme := newBranchTestScheme()
+				branch := newErrorTestBranch()
+				baseClient := newBranchFakeClient(scheme, branch)
+				ghManager := &fakeGitHubClientManager{
+					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+						return &fakeGitHubClient{
+							GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+								return []string{"infrastructure/app/main.tf"}, nil
+							},
+						}, nil
+					},
+				}
+				reconciler := &BranchReconciler{
+					Client:              &listWorkflowTemplateErrorClient{Client: baseClient, err: fmt.Errorf("list templates failed")},
+					Scheme:              scheme,
+					GitHubClientManager: ghManager,
+				}
+				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
+			}, "list templates failed"),
+			Entry("fails when adding finalizer update errors", func() setupResult {
+				scheme := newBranchTestScheme()
+				branch := newErrorTestBranch()
+				branch.Finalizers = nil
+				baseClient := newBranchFakeClient(scheme, branch)
+				reconciler := &BranchReconciler{
+					Client:              &updateErrorClient{Client: baseClient, err: fmt.Errorf("update failed")},
+					Scheme:              scheme,
+					GitHubClientManager: &fakeGitHubClientManager{},
+				}
+				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
+			}, "update failed"),
+			Entry("fails when deleting workflows errors during finalization", func() setupResult {
+				scheme := newBranchTestScheme()
+				branch := newErrorTestBranch()
+				now := metav1.Now()
+				branch.DeletionTimestamp = &now
+				branch.UID = types.UID("branch-error-uid")
+				workflow := &terrakojoiov1alpha1.Workflow{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "workflow-error",
+						Namespace: branch.Namespace,
+					},
+					Spec: terrakojoiov1alpha1.WorkflowSpec{
+						Owner:      branch.Spec.Owner,
+						Repository: branch.Spec.Repository,
+						Branch:     branch.Name,
+						SHA:        branch.Spec.SHA,
+						Template:   "template",
+					},
+				}
+				Expect(controllerutil.SetControllerReference(branch, workflow, scheme)).To(Succeed())
+				baseClient := newBranchFakeClient(scheme, branch, workflow)
+				reconciler := &BranchReconciler{
+					Client:              &deleteWorkflowErrorClient{Client: baseClient, err: fmt.Errorf("delete workflow error")},
+					Scheme:              scheme,
+					GitHubClientManager: &fakeGitHubClientManager{},
+				}
+				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
+			}, "failed to delete workflow"),
+		)
 	})
 })
