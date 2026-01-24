@@ -42,12 +42,12 @@ type Client struct {
 }
 
 // NewClient creates a new GitHub client using legacy config (backward compatibility)
-func NewClient(ctx context.Context, config *config.Config) (*Client, error) {
+func NewClient(ctx context.Context, cfg *config.Config) (*Client, error) {
 	itr, err := ghinstallation.New(
 		http.DefaultTransport,
-		config.GitHubAppID,
-		config.GitHubInstallationID,
-		[]byte(config.GitHubPrivateKeyPath),
+		cfg.GitHubAppID,
+		cfg.GitHubInstallationID,
+		[]byte(cfg.GitHubPrivateKeyPath),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GitHub installation transport: %w", err)

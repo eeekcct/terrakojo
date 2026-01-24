@@ -34,7 +34,7 @@ type WebhookInfo struct {
 func ProcessPullRequestEvent(event github.PullRequestPayload) *WebhookInfo {
 	pr := event.PullRequest
 	repo := event.Repository
-	action := string(event.Action)
+	action := event.Action
 
 	mergeSHA := ""
 	if pr.MergeCommitSha != nil {

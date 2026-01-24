@@ -349,7 +349,7 @@ func newWebhookHandlerWithRepo(t *testing.T, repo *v1alpha1.Repository) *Handler
 	return h
 }
 
-func baseRepo(defaultBranch string) *v1alpha1.Repository {
+func baseRepo() *v1alpha1.Repository {
 	return &v1alpha1.Repository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "repo",
@@ -363,7 +363,7 @@ func baseRepo(defaultBranch string) *v1alpha1.Repository {
 			Owner:         "eeekcct",
 			Name:          "terrakojo",
 			Type:          "github",
-			DefaultBranch: defaultBranch,
+			DefaultBranch: "main",
 			GitHubSecretRef: v1alpha1.GitHubSecretRef{
 				Name: "gh",
 			},
@@ -384,7 +384,7 @@ func makeRequest(t *testing.T, event string, body []byte) *http.Request {
 
 func TestPushDefaultBranchEnqueuesCommit(t *testing.T) {
 	body := mustLoadPayload(t, "github-push-default-branch.json")
-	repo := baseRepo("main")
+	repo := baseRepo()
 	handler := newWebhookHandlerWithRepo(t, repo)
 
 	req := makeRequest(t, string(github.EventTypePush), body)
@@ -406,7 +406,7 @@ func TestPushDefaultBranchEnqueuesCommit(t *testing.T) {
 
 func TestPushFeatureBranchUpdatesBranchList(t *testing.T) {
 	body := mustLoadPayload(t, "github-push-feature-branch.json")
-	repo := baseRepo("main")
+	repo := baseRepo()
 	// Pretend we already had an older SHA
 	repo.Status.BranchList = []v1alpha1.BranchInfo{{
 		Ref: "feature/add-api",
@@ -432,7 +432,7 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 	syncBody := mustLoadPayload(t, "github-pull-request-synchronize-simple.json")
 	closeBody := mustLoadPayload(t, "github-pull-request-closed-merged.json")
 
-	repo := baseRepo("main")
+	repo := baseRepo()
 	handler := newWebhookHandlerWithRepo(t, repo)
 
 	// opened
@@ -470,7 +470,7 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 func TestPRFromDefaultBranchDoesNotUpdateBranchList(t *testing.T) {
 	openBody := mustLoadPayload(t, "github-pull-request-opened-default-branch.json")
 
-	repo := baseRepo("main")
+	repo := baseRepo()
 	handler := newWebhookHandlerWithRepo(t, repo)
 
 	// opened - PR from default branch (edge case)

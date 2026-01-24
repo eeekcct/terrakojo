@@ -238,3 +238,7 @@ mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $$(realpath $(1)-$(3)) $(1)
 endef
+
+.PHONY: coverage
+coverage: test ## Generate coverage report.
+	go tool cover -html=cover.out -o coverage.html

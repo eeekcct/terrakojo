@@ -65,6 +65,8 @@ const branchFinalizer = "terrakojo.io/cleanup-workflows"
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/reconcile
+//
+//nolint:gocyclo // Reconcile handles multiple lifecycle branches for clarity.
 func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -74,7 +76,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Handle deletion: ensure workflows are removed before allowing branch GC
-	if !branch.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !branch.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&branch, branchFinalizer) {
 			if err := r.deleteWorkflowsForBranch(ctx, &branch); err != nil {
 				log.Error(err, "Failed to delete workflows while finalizing branch")
@@ -336,7 +338,7 @@ func (r *BranchReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch, templateName, workflowName, path string) error {
+func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch, templateName, workflowName, workflowPath string) error {
 	workflow := &terrakojoiov1alpha1.Workflow{
 		ObjectMeta: ctrl.ObjectMeta{
 			Name:      workflowName,
@@ -351,7 +353,7 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 			Repository: branch.Spec.Repository,
 			SHA:        branch.Spec.SHA,
 			Template:   templateName,
-			Path:       path,
+			Path:       workflowPath,
 		},
 	}
 	if err := controllerutil.SetControllerReference(branch, workflow, r.Scheme); err != nil {

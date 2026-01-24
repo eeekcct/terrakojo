@@ -11,7 +11,7 @@ import (
 
 // NewClient creates a new Kubernetes client with proper scheme configuration
 func NewClient() (client.Client, error) {
-	config, err := config.GetConfig()
+	restConfig, err := config.GetConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -23,7 +23,7 @@ func NewClient() (client.Client, error) {
 	// Add custom resources (CRDs)
 	_ = v1alpha1.AddToScheme(scheme)
 
-	k8sClient, err := client.New(config, client.Options{
+	k8sClient, err := client.New(restConfig, client.Options{
 		Scheme: scheme,
 	})
 	if err != nil {
