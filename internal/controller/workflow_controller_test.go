@@ -43,16 +43,16 @@ import (
 )
 
 func newWorkflowTestScheme() *runtime.Scheme {
-	scheme := runtime.NewScheme()
-	Expect(terrakojoiov1alpha1.AddToScheme(scheme)).To(Succeed())
-	Expect(batchv1.AddToScheme(scheme)).To(Succeed())
-	Expect(corev1.AddToScheme(scheme)).To(Succeed())
-	return scheme
+	testScheme := runtime.NewScheme()
+	Expect(terrakojoiov1alpha1.AddToScheme(testScheme)).To(Succeed())
+	Expect(batchv1.AddToScheme(testScheme)).To(Succeed())
+	Expect(corev1.AddToScheme(testScheme)).To(Succeed())
+	return testScheme
 }
 
-func newWorkflowFakeClient(scheme *runtime.Scheme, objs ...client.Object) client.Client {
+func newWorkflowFakeClient(testScheme *runtime.Scheme, objs ...client.Object) client.Client {
 	builder := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(testScheme).
 		WithStatusSubresource(&terrakojoiov1alpha1.Workflow{}, &terrakojoiov1alpha1.Branch{}, &terrakojoiov1alpha1.Repository{}, &batchv1.Job{})
 	if len(objs) > 0 {
 		builder.WithObjects(objs...)
@@ -208,11 +208,11 @@ var _ = Describe("Workflow Controller", func() {
 	When("reconciling Workflow resources (unit paths)", func() {
 		It("ignores reconcile when workflow is missing", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			reconciler := &WorkflowReconciler{
-				Client: newWorkflowFakeClient(scheme),
-				Scheme: scheme,
+				Client: newWorkflowFakeClient(testScheme),
+				Scheme: testScheme,
 			}
 
 			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "missing-workflow", Namespace: "default"}})
@@ -221,7 +221,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("returns nil when workflow template is missing", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{
@@ -251,7 +251,7 @@ var _ = Describe("Workflow Controller", func() {
 				},
 			}
 
-			fakeClient := newWorkflowFakeClient(scheme, workflow, branch)
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch)
 			ghManager := &fakeGitHubClientManager{
 				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 					return &fakeGitHubClient{}, nil
@@ -259,7 +259,7 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			reconciler := &WorkflowReconciler{
 				Client:              fakeClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: ghManager,
 			}
 
@@ -273,7 +273,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("adds finalizer when missing", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{
@@ -302,7 +302,7 @@ var _ = Describe("Workflow Controller", func() {
 				},
 			}
 
-			fakeClient := newWorkflowFakeClient(scheme, workflow, branch)
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch)
 			ghManager := &fakeGitHubClientManager{
 				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 					return &fakeGitHubClient{}, nil
@@ -310,7 +310,7 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			reconciler := &WorkflowReconciler{
 				Client:              fakeClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: ghManager,
 			}
 
@@ -324,7 +324,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("deletes workflow when branch is missing", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{
@@ -342,10 +342,10 @@ var _ = Describe("Workflow Controller", func() {
 				},
 			}
 
-			fakeClient := newWorkflowFakeClient(scheme, workflow)
+			fakeClient := newWorkflowFakeClient(testScheme, workflow)
 			reconciler := &WorkflowReconciler{
 				Client:              fakeClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 
@@ -363,7 +363,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("logs error when deleting workflow for missing branch fails", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{
@@ -381,10 +381,10 @@ var _ = Describe("Workflow Controller", func() {
 				},
 			}
 
-			baseClient := newWorkflowFakeClient(scheme, workflow)
+			baseClient := newWorkflowFakeClient(testScheme, workflow)
 			reconciler := &WorkflowReconciler{
 				Client:              &workflowDeleteErrorClient{Client: baseClient, err: fmt.Errorf("delete error")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 
@@ -397,7 +397,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("creates job and updates status when job is missing", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{
@@ -446,7 +446,7 @@ var _ = Describe("Workflow Controller", func() {
 				},
 			}
 
-			fakeClient := newWorkflowFakeClient(scheme, workflow, branch, template)
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
 			var updateCalled atomic.Bool
 			checkRunID := int64(123)
 			ghManager := &fakeGitHubClientManager{
@@ -464,7 +464,7 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			reconciler := &WorkflowReconciler{
 				Client:              fakeClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: ghManager,
 			}
 
@@ -485,7 +485,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("updates workflow when job exists", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{
@@ -527,7 +527,7 @@ var _ = Describe("Workflow Controller", func() {
 					Succeeded: 1,
 				},
 			}
-			fakeClient := newWorkflowFakeClient(scheme, workflow, branch, job)
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch, job)
 			var updateCalled atomic.Bool
 			ghManager := &fakeGitHubClientManager{
 				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
@@ -541,7 +541,7 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			reconciler := &WorkflowReconciler{
 				Client:              fakeClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: ghManager,
 			}
 
@@ -556,7 +556,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("removes finalizer on deletion after cancelling checkrun", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 			now := metav1.Now()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
@@ -600,7 +600,7 @@ var _ = Describe("Workflow Controller", func() {
 					Active: 1,
 				},
 			}
-			fakeClient := newWorkflowFakeClient(scheme, workflow, branch, job)
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch, job)
 			var updateCalled atomic.Bool
 			ghManager := &fakeGitHubClientManager{
 				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
@@ -614,7 +614,7 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			reconciler := &WorkflowReconciler{
 				Client:              fakeClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: ghManager,
 			}
 
@@ -633,7 +633,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("ignores not found error from updateWorkflowStatusWithRetry after checkrun creation", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{
@@ -676,7 +676,7 @@ var _ = Describe("Workflow Controller", func() {
 				},
 			}
 
-			baseClient := newWorkflowFakeClient(scheme, workflow, branch, template)
+			baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
 			notFoundErr := apierrors.NewNotFound(
 				terrakojoiov1alpha1.GroupVersion.WithResource("workflows").GroupResource(),
 				workflow.Name,
@@ -696,7 +696,7 @@ var _ = Describe("Workflow Controller", func() {
 
 			reconciler := &WorkflowReconciler{
 				Client:              &statusErrorClient{Client: baseClient, err: notFoundErr},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: ghManager,
 			}
 
@@ -724,7 +724,7 @@ var _ = Describe("Workflow Controller", func() {
 				Expect(err.Error()).To(ContainSubstring(expectedSubstring))
 			},
 			Entry("fails when branch get errors", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "workflow-branch-error",
@@ -739,16 +739,16 @@ var _ = Describe("Workflow Controller", func() {
 						Path:       "path",
 					},
 				}
-				baseClient := newWorkflowFakeClient(scheme, workflow)
+				baseClient := newWorkflowFakeClient(testScheme, workflow)
 				reconciler := &WorkflowReconciler{
 					Client:              &branchGetErrorClient{Client: baseClient, err: fmt.Errorf("branch get error")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "branch get error"),
 			Entry("fails when GitHubClientManager is nil", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "workflow-nil-gh",
@@ -775,12 +775,12 @@ var _ = Describe("Workflow Controller", func() {
 						SHA:        workflow.Spec.SHA,
 					},
 				}
-				client := newWorkflowFakeClient(scheme, workflow, branch)
-				reconciler := &WorkflowReconciler{Client: client, Scheme: scheme}
+				client := newWorkflowFakeClient(testScheme, workflow, branch)
+				reconciler := &WorkflowReconciler{Client: client, Scheme: testScheme}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "GitHubClientManager not initialized"),
 			Entry("fails when GetClientForBranch returns error", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "workflow-gh-error",
@@ -807,17 +807,17 @@ var _ = Describe("Workflow Controller", func() {
 						SHA:        workflow.Spec.SHA,
 					},
 				}
-				client := newWorkflowFakeClient(scheme, workflow, branch)
+				client := newWorkflowFakeClient(testScheme, workflow, branch)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return nil, fmt.Errorf("gh client error")
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: client, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: client, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "gh client error"),
 			Entry("fails when handleWorkflowDeletion returns error", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				now := metav1.Now()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
@@ -852,7 +852,7 @@ var _ = Describe("Workflow Controller", func() {
 					ObjectMeta: metav1.ObjectMeta{Name: "workflow-delete-error-job", Namespace: workflow.Namespace},
 					Status:     batchv1.JobStatus{Active: 1},
 				}
-				client := newWorkflowFakeClient(scheme, workflow, branch, job)
+				client := newWorkflowFakeClient(testScheme, workflow, branch, job)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -862,11 +862,11 @@ var _ = Describe("Workflow Controller", func() {
 						}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: client, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: client, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "checkrun update error"),
 			Entry("fails when removing finalizer update errors", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				now := metav1.Now()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
@@ -884,16 +884,16 @@ var _ = Describe("Workflow Controller", func() {
 						Path:       "path",
 					},
 				}
-				client := newWorkflowFakeClient(scheme, workflow)
+				client := newWorkflowFakeClient(testScheme, workflow)
 				reconciler := &WorkflowReconciler{
 					Client:              &updateErrorClient{Client: client, err: fmt.Errorf("remove finalizer update failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "remove finalizer update failed"),
 			Entry("fails when job get returns error", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-job-get-error",
@@ -918,16 +918,16 @@ var _ = Describe("Workflow Controller", func() {
 						SHA:        workflow.Spec.SHA,
 					},
 				}
-				baseClient := newWorkflowFakeClient(scheme, workflow, branch)
+				baseClient := newWorkflowFakeClient(testScheme, workflow, branch)
 				reconciler := &WorkflowReconciler{
 					Client:              &jobGetErrorClient{Client: baseClient, err: fmt.Errorf("job get error")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "job get error"),
 			Entry("fails when UpdateCheckRun errors with existing job", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-update-checkrun-error",
@@ -960,7 +960,7 @@ var _ = Describe("Workflow Controller", func() {
 					ObjectMeta: metav1.ObjectMeta{Name: "workflow-update-checkrun-error-job", Namespace: workflow.Namespace},
 					Status:     batchv1.JobStatus{Succeeded: 1},
 				}
-				client := newWorkflowFakeClient(scheme, workflow, branch, job)
+				client := newWorkflowFakeClient(testScheme, workflow, branch, job)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -970,11 +970,11 @@ var _ = Describe("Workflow Controller", func() {
 						}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: client, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: client, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "update checkrun error"),
 			Entry("fails when updateWorkflowStatus errors with existing job", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-update-status-error",
@@ -1007,7 +1007,7 @@ var _ = Describe("Workflow Controller", func() {
 					ObjectMeta: metav1.ObjectMeta{Name: "workflow-update-status-error-job", Namespace: workflow.Namespace},
 					Status:     batchv1.JobStatus{Succeeded: 1},
 				}
-				baseClient := newWorkflowFakeClient(scheme, workflow, branch, job)
+				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, job)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{UpdateCheckRunFunc: func(owner, repo string, checkRunID int64, name, status, conclusion string) error {
@@ -1015,11 +1015,11 @@ var _ = Describe("Workflow Controller", func() {
 						}}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")}, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")}, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "status update failed"),
 			Entry("fails when CreateCheckRun errors", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-create-checkrun-error",
@@ -1053,7 +1053,7 @@ var _ = Describe("Workflow Controller", func() {
 					},
 				}
 				client := fake.NewClientBuilder().
-					WithScheme(scheme).
+					WithScheme(testScheme).
 					WithStatusSubresource(&terrakojoiov1alpha1.Workflow{}).
 					WithObjects(workflow, branch, template).
 					Build()
@@ -1064,11 +1064,11 @@ var _ = Describe("Workflow Controller", func() {
 						}}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: client, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: client, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "create checkrun error"),
 			Entry("fails when updating workflow status after checkrun creation", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-checkrun-status-error",
@@ -1101,7 +1101,7 @@ var _ = Describe("Workflow Controller", func() {
 						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
 					},
 				}
-				baseClient := newWorkflowFakeClient(scheme, workflow, branch, template)
+				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
 				checkRunID := int64(1)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
@@ -1110,12 +1110,12 @@ var _ = Describe("Workflow Controller", func() {
 						}}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")}, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")}, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "status update failed"),
 			Entry("fails when SetControllerReference errors", func() setupResult {
-				scheme := runtime.NewScheme()
-				Expect(terrakojoiov1alpha1.AddToScheme(scheme)).To(Succeed())
+				testScheme := runtime.NewScheme()
+				Expect(terrakojoiov1alpha1.AddToScheme(testScheme)).To(Succeed())
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-setref-error",
@@ -1149,7 +1149,7 @@ var _ = Describe("Workflow Controller", func() {
 					},
 				}
 				client := fake.NewClientBuilder().
-					WithScheme(scheme).
+					WithScheme(testScheme).
 					WithStatusSubresource(&terrakojoiov1alpha1.Workflow{}).
 					WithObjects(workflow, branch, template).
 					Build()
@@ -1161,11 +1161,11 @@ var _ = Describe("Workflow Controller", func() {
 						}}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: client, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: client, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "no kind is registered"),
 			Entry("fails when creating job errors", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-create-job-error",
@@ -1198,7 +1198,7 @@ var _ = Describe("Workflow Controller", func() {
 						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
 					},
 				}
-				baseClient := newWorkflowFakeClient(scheme, workflow, branch, template)
+				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
 				checkRunID := int64(1)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
@@ -1207,11 +1207,11 @@ var _ = Describe("Workflow Controller", func() {
 						}}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: &jobCreateErrorClient{Client: baseClient, err: fmt.Errorf("create job error")}, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: &jobCreateErrorClient{Client: baseClient, err: fmt.Errorf("create job error")}, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "create job error"),
 			Entry("fails when UpdateCheckRun errors after job creation", func() setupResult {
-				scheme := newWorkflowTestScheme()
+				testScheme := newWorkflowTestScheme()
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:       "workflow-update-checkrun-after-job",
@@ -1244,7 +1244,7 @@ var _ = Describe("Workflow Controller", func() {
 						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
 					},
 				}
-				client := newWorkflowFakeClient(scheme, workflow, branch, template)
+				client := newWorkflowFakeClient(testScheme, workflow, branch, template)
 				checkRunID := int64(1)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
@@ -1258,7 +1258,7 @@ var _ = Describe("Workflow Controller", func() {
 						}, nil
 					},
 				}
-				reconciler := &WorkflowReconciler{Client: client, Scheme: scheme, GitHubClientManager: ghManager}
+				reconciler := &WorkflowReconciler{Client: client, Scheme: testScheme, GitHubClientManager: ghManager}
 				return setupResult{reconciler: reconciler, request: makeRequest(workflow)}
 			}, "update checkrun error"),
 		)
@@ -1289,7 +1289,7 @@ var _ = Describe("Workflow Controller", func() {
 
 		DescribeTable("checkRunStatus", func(phase WorkflowPhase, status, conclusion string) {
 			reconciler := &WorkflowReconciler{}
-			gotStatus, gotConclusion := reconciler.checkRunStatus(context.Background(), &terrakojoiov1alpha1.Workflow{}, phase)
+			gotStatus, gotConclusion := reconciler.checkRunStatus(phase)
 			Expect(gotStatus).To(Equal(status))
 			Expect(gotConclusion).To(Equal(conclusion))
 		},
@@ -1322,12 +1322,12 @@ var _ = Describe("Workflow Controller", func() {
 		})
 
 		It("updateWorkflowStatusWithRetry returns error when workflow get fails", func() {
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "workflow-get-error", Namespace: "default"},
 			}
-			baseClient := newWorkflowFakeClient(scheme, workflow)
-			reconciler := &WorkflowReconciler{Client: &workflowGetErrorClient{Client: baseClient, err: fmt.Errorf("get error")}, Scheme: scheme}
+			baseClient := newWorkflowFakeClient(testScheme, workflow)
+			reconciler := &WorkflowReconciler{Client: &workflowGetErrorClient{Client: baseClient, err: fmt.Errorf("get error")}, Scheme: testScheme}
 			err := reconciler.updateWorkflowStatusWithRetry(context.Background(), workflow, func(latest *terrakojoiov1alpha1.Workflow) {
 				latest.Status.Phase = string(WorkflowPhaseRunning)
 			})
@@ -1336,12 +1336,12 @@ var _ = Describe("Workflow Controller", func() {
 		})
 
 		It("updateWorkflowStatusWithRetry returns error when status update fails", func() {
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "workflow-status-error", Namespace: "default"},
 			}
-			baseClient := newWorkflowFakeClient(scheme, workflow)
-			reconciler := &WorkflowReconciler{Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")}, Scheme: scheme}
+			baseClient := newWorkflowFakeClient(testScheme, workflow)
+			reconciler := &WorkflowReconciler{Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")}, Scheme: testScheme}
 			err := reconciler.updateWorkflowStatusWithRetry(context.Background(), workflow, func(latest *terrakojoiov1alpha1.Workflow) {
 				latest.Status.Phase = string(WorkflowPhaseRunning)
 			})
@@ -1350,8 +1350,8 @@ var _ = Describe("Workflow Controller", func() {
 		})
 
 		It("handleWorkflowDeletion returns nil when CheckRunID is zero", func() {
-			scheme := newWorkflowTestScheme()
-			reconciler := &WorkflowReconciler{Client: newWorkflowFakeClient(scheme), Scheme: scheme}
+			testScheme := newWorkflowTestScheme()
+			reconciler := &WorkflowReconciler{Client: newWorkflowFakeClient(testScheme), Scheme: testScheme}
 			workflow := &terrakojoiov1alpha1.Workflow{}
 			err := reconciler.handleWorkflowDeletion(context.Background(), &fakeGitHubClient{}, workflow, "job")
 			Expect(err).NotTo(HaveOccurred())
@@ -1361,13 +1361,13 @@ var _ = Describe("Workflow Controller", func() {
 	When("handling workflow deletion", func() {
 		It("returns nil without updating checkrun when job is completed", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
+			testScheme := newWorkflowTestScheme()
 
 			job := &batchv1.Job{
 				ObjectMeta: metav1.ObjectMeta{Name: "workflow-complete-job", Namespace: "default"},
 				Status:     batchv1.JobStatus{Succeeded: 1},
 			}
-			reconciler := &WorkflowReconciler{Client: newWorkflowFakeClient(scheme, job), Scheme: scheme}
+			reconciler := &WorkflowReconciler{Client: newWorkflowFakeClient(testScheme, job), Scheme: testScheme}
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "workflow-complete", Namespace: "default"},
@@ -1396,8 +1396,8 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("returns nil without updating checkrun when job is not found", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
-			reconciler := &WorkflowReconciler{Client: newWorkflowFakeClient(scheme), Scheme: scheme}
+			testScheme := newWorkflowTestScheme()
+			reconciler := &WorkflowReconciler{Client: newWorkflowFakeClient(testScheme), Scheme: testScheme}
 
 			workflow := &terrakojoiov1alpha1.Workflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "workflow-missing-job", Namespace: "default"},
@@ -1426,11 +1426,11 @@ var _ = Describe("Workflow Controller", func() {
 
 		It("returns an error when job lookup fails", func() {
 			ctx := context.Background()
-			scheme := newWorkflowTestScheme()
-			baseClient := newWorkflowFakeClient(scheme)
+			testScheme := newWorkflowTestScheme()
+			baseClient := newWorkflowFakeClient(testScheme)
 			reconciler := &WorkflowReconciler{
 				Client: &jobGetErrorClient{Client: baseClient, err: fmt.Errorf("job get error")},
-				Scheme: scheme,
+				Scheme: testScheme,
 			}
 
 			workflow := &terrakojoiov1alpha1.Workflow{

@@ -69,7 +69,7 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Handle deletion and cleanup owned Branches first
-	if !repo.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !repo.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&repo, repositoryFinalizer) {
 			if res, err := r.handleRepositoryDeletion(ctx, &repo); err != nil {
 				log.Error(err, "Failed to cleanup branches before deleting repository")

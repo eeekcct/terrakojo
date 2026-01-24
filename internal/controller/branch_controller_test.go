@@ -60,14 +60,14 @@ func createTestNamespace(ctx context.Context) string {
 }
 
 func newBranchTestScheme() *runtime.Scheme {
-	scheme := runtime.NewScheme()
-	Expect(terrakojoiov1alpha1.AddToScheme(scheme)).To(Succeed())
-	return scheme
+	testScheme := runtime.NewScheme()
+	Expect(terrakojoiov1alpha1.AddToScheme(testScheme)).To(Succeed())
+	return testScheme
 }
 
-func newBranchFakeClient(scheme *runtime.Scheme, objs ...client.Object) client.Client {
+func newBranchFakeClient(testScheme *runtime.Scheme, objs ...client.Object) client.Client {
 	builder := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(testScheme).
 		WithIndex(&terrakojoiov1alpha1.Workflow{}, "metadata.ownerReferences.uid", indexByOwnerBranchUID).
 		WithStatusSubresource(&terrakojoiov1alpha1.Branch{}, &terrakojoiov1alpha1.Repository{}, &terrakojoiov1alpha1.Workflow{})
 	if len(objs) > 0 {
@@ -765,7 +765,7 @@ var _ = Describe("Branch Controller", func() {
 
 	When("reconciling Branch resources (unit paths)", func() {
 		It("skips workflow creation when matched files are at repo root", func() {
-			scheme := newBranchTestScheme()
+			testScheme := newBranchTestScheme()
 			branch := newErrorTestBranch()
 			template := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: metav1.ObjectMeta{
@@ -786,7 +786,7 @@ var _ = Describe("Branch Controller", func() {
 					},
 				},
 			}
-			fakeClient := newBranchFakeClient(scheme, branch, template)
+			fakeClient := newBranchFakeClient(testScheme, branch, template)
 			ghManager := &fakeGitHubClientManager{
 				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 					return &fakeGitHubClient{
@@ -798,7 +798,7 @@ var _ = Describe("Branch Controller", func() {
 			}
 			reconciler := &BranchReconciler{
 				Client:              fakeClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: ghManager,
 			}
 
@@ -831,31 +831,31 @@ var _ = Describe("Branch Controller", func() {
 				Expect(err.Error()).To(ContainSubstring(expectedSubstring))
 			},
 			Entry("fails when listing workflows errors", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				baseClient := newBranchFakeClient(scheme, branch)
+				baseClient := newBranchFakeClient(testScheme, branch)
 				reconciler := &BranchReconciler{
 					Client:              &listErrorClient{Client: baseClient, err: fmt.Errorf("list failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "list failed"),
 			Entry("fails when GitHubClientManager is nil", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				client := newBranchFakeClient(scheme, branch)
+				client := newBranchFakeClient(testScheme, branch)
 				reconciler := &BranchReconciler{
 					Client:              client,
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: nil,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "GitHubClientManager not initialized"),
 			Entry("fails when GetClientForBranch returns error", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				client := newBranchFakeClient(scheme, branch)
+				client := newBranchFakeClient(testScheme, branch)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return nil, fmt.Errorf("gh client error")
@@ -863,15 +863,15 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              client,
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "gh client error"),
 			Entry("fails when commit changed files returns error", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				client := newBranchFakeClient(scheme, branch)
+				client := newBranchFakeClient(testScheme, branch)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -883,15 +883,15 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              client,
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "changed files error"),
 			Entry("fails when listing workflow templates returns error", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				baseClient := newBranchFakeClient(scheme, branch)
+				baseClient := newBranchFakeClient(testScheme, branch)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -903,25 +903,25 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &listWorkflowTemplateErrorClient{Client: baseClient, err: fmt.Errorf("list templates failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "list templates failed"),
 			Entry("fails when adding finalizer update errors", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.Finalizers = nil
-				baseClient := newBranchFakeClient(scheme, branch)
+				baseClient := newBranchFakeClient(testScheme, branch)
 				reconciler := &BranchReconciler{
 					Client:              &updateErrorClient{Client: baseClient, err: fmt.Errorf("update failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "update failed"),
 			Entry("fails when deleting workflows errors during finalization", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				now := metav1.Now()
 				branch.DeletionTimestamp = &now
@@ -939,43 +939,43 @@ var _ = Describe("Branch Controller", func() {
 						Template:   "template",
 					},
 				}
-				Expect(controllerutil.SetControllerReference(branch, workflow, scheme)).To(Succeed())
-				baseClient := newBranchFakeClient(scheme, branch, workflow)
+				Expect(controllerutil.SetControllerReference(branch, workflow, testScheme)).To(Succeed())
+				baseClient := newBranchFakeClient(testScheme, branch, workflow)
 				reconciler := &BranchReconciler{
 					Client:              &deleteWorkflowErrorClient{Client: baseClient, err: fmt.Errorf("delete workflow error")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "failed to delete workflow"),
 			Entry("fails when listing remaining workflows during deletion", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				now := metav1.Now()
 				branch.DeletionTimestamp = &now
-				baseClient := newBranchFakeClient(scheme, branch)
+				baseClient := newBranchFakeClient(testScheme, branch)
 				reconciler := &BranchReconciler{
 					Client:              &workflowListSequenceClient{Client: baseClient, err: fmt.Errorf("list remaining failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "list remaining failed"),
 			Entry("fails when removing finalizer update errors", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				now := metav1.Now()
 				branch.DeletionTimestamp = &now
-				baseClient := newBranchFakeClient(scheme, branch)
+				baseClient := newBranchFakeClient(testScheme, branch)
 				reconciler := &BranchReconciler{
 					Client:              &updateErrorClient{Client: baseClient, err: fmt.Errorf("remove finalizer update failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "remove finalizer update failed"),
 			Entry("fails when cleanup repository status errors for completed branch", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.UID = types.UID("branch-completed-error")
 				workflow := &terrakojoiov1alpha1.Workflow{
@@ -994,17 +994,17 @@ var _ = Describe("Branch Controller", func() {
 						Phase: string(WorkflowPhaseSucceeded),
 					},
 				}
-				Expect(controllerutil.SetControllerReference(branch, workflow, scheme)).To(Succeed())
-				baseClient := newBranchFakeClient(scheme, branch, workflow)
+				Expect(controllerutil.SetControllerReference(branch, workflow, testScheme)).To(Succeed())
+				baseClient := newBranchFakeClient(testScheme, branch, workflow)
 				reconciler := &BranchReconciler{
 					Client:              &listRepositoryErrorClient{Client: baseClient, err: fmt.Errorf("list repos failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "list repos failed"),
 			Entry("fails when deleting completed branch", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.UID = types.UID("branch-completed-delete")
 				repo := &terrakojoiov1alpha1.Repository{
@@ -1050,17 +1050,17 @@ var _ = Describe("Branch Controller", func() {
 						Phase: string(WorkflowPhaseSucceeded),
 					},
 				}
-				Expect(controllerutil.SetControllerReference(branch, workflow, scheme)).To(Succeed())
-				baseClient := newBranchFakeClient(scheme, branch, workflow, repo)
+				Expect(controllerutil.SetControllerReference(branch, workflow, testScheme)).To(Succeed())
+				baseClient := newBranchFakeClient(testScheme, branch, workflow, repo)
 				reconciler := &BranchReconciler{
 					Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete branch failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "delete branch failed"),
 			Entry("fails when deleting workflows after SHA change", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.Annotations = map[string]string{
 					"terrakojo.io/last-sha": "0123456789abcdef0123456789abcdef01234567",
@@ -1080,20 +1080,20 @@ var _ = Describe("Branch Controller", func() {
 						Template:   "template",
 					},
 				}
-				Expect(controllerutil.SetControllerReference(branch, workflow, scheme)).To(Succeed())
-				baseClient := newBranchFakeClient(scheme, branch, workflow)
+				Expect(controllerutil.SetControllerReference(branch, workflow, testScheme)).To(Succeed())
+				baseClient := newBranchFakeClient(testScheme, branch, workflow)
 				reconciler := &BranchReconciler{
 					Client:              &deleteWorkflowErrorClient{Client: baseClient, err: fmt.Errorf("delete workflow error")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: &fakeGitHubClientManager{},
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "failed to delete workflow"),
 			Entry("fails when PR changed files returns error", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.Spec.PRNumber = 7
-				client := newBranchFakeClient(scheme, branch)
+				client := newBranchFakeClient(testScheme, branch)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1105,15 +1105,15 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              client,
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "pr changed files error"),
 			Entry("fails when cleanup repository status errors with no changed files", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				client := newBranchFakeClient(scheme, branch)
+				client := newBranchFakeClient(testScheme, branch)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1125,13 +1125,13 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &listRepositoryErrorClient{Client: client, err: fmt.Errorf("list repos failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "list repos failed"),
 			Entry("fails when deleting branch with no changed files", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				repo := &terrakojoiov1alpha1.Repository{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1160,7 +1160,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(scheme, branch, repo)
+				baseClient := newBranchFakeClient(testScheme, branch, repo)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1172,13 +1172,13 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete branch failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "delete branch failed"),
 			Entry("fails when cleanup repository status errors with no matching templates", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1199,7 +1199,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				client := newBranchFakeClient(scheme, branch, template)
+				client := newBranchFakeClient(testScheme, branch, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1211,13 +1211,13 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &listRepositoryErrorClient{Client: client, err: fmt.Errorf("list repos failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "list repos failed"),
 			Entry("fails when deleting branch with no matching templates", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				repo := &terrakojoiov1alpha1.Repository{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1265,7 +1265,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(scheme, branch, repo, template)
+				baseClient := newBranchFakeClient(testScheme, branch, repo, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1277,13 +1277,13 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete branch failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "delete branch failed"),
 			Entry("fails when create workflow returns error", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1304,7 +1304,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(scheme, branch, template)
+				baseClient := newBranchFakeClient(testScheme, branch, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1316,13 +1316,13 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &createWorkflowErrorClient{Client: baseClient, err: fmt.Errorf("create workflow error")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "create workflow error"),
 			Entry("fails when updating branch annotations returns error", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1343,7 +1343,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(scheme, branch, template)
+				baseClient := newBranchFakeClient(testScheme, branch, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1355,13 +1355,13 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &updateErrorClient{Client: baseClient, err: fmt.Errorf("update annotations failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "update annotations failed"),
 			Entry("fails when updating branch status returns error", func() setupResult {
-				scheme := newBranchTestScheme()
+				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1382,7 +1382,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(scheme, branch, template)
+				baseClient := newBranchFakeClient(testScheme, branch, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1394,7 +1394,7 @@ var _ = Describe("Branch Controller", func() {
 				}
 				reconciler := &BranchReconciler{
 					Client:              &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")},
-					Scheme:              scheme,
+					Scheme:              testScheme,
 					GitHubClientManager: ghManager,
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
@@ -1456,14 +1456,14 @@ var _ = Describe("Branch Controller", func() {
 		})
 
 		It("deleteWorkflowsForBranch returns error when list fails", func() {
-			scheme := newBranchTestScheme()
+			testScheme := newBranchTestScheme()
 			branch := newErrorTestBranch()
 			reconciler := &BranchReconciler{
 				Client: &listErrorClient{
-					Client: newBranchFakeClient(scheme, branch),
+					Client: newBranchFakeClient(testScheme, branch),
 					err:    fmt.Errorf("list failed"),
 				},
-				Scheme: scheme,
+				Scheme: testScheme,
 			}
 			err := reconciler.deleteWorkflowsForBranch(context.Background(), branch)
 			Expect(err).To(HaveOccurred())
@@ -1471,12 +1471,12 @@ var _ = Describe("Branch Controller", func() {
 		})
 
 		It("createWorkflowForBranch returns error when workflow GVK is missing", func() {
-			scheme := runtime.NewScheme()
-			scheme.AddKnownTypes(terrakojoiov1alpha1.GroupVersion, &terrakojoiov1alpha1.Branch{}, &terrakojoiov1alpha1.BranchList{})
-			metav1.AddToGroupVersion(scheme, terrakojoiov1alpha1.GroupVersion)
+			testScheme := runtime.NewScheme()
+			testScheme.AddKnownTypes(terrakojoiov1alpha1.GroupVersion, &terrakojoiov1alpha1.Branch{}, &terrakojoiov1alpha1.BranchList{})
+			metav1.AddToGroupVersion(testScheme, terrakojoiov1alpha1.GroupVersion)
 			reconciler := &BranchReconciler{
-				Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
-				Scheme: scheme,
+				Client: fake.NewClientBuilder().WithScheme(testScheme).Build(),
+				Scheme: testScheme,
 			}
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1564,7 +1564,7 @@ var _ = Describe("Branch Controller", func() {
 		})
 
 		It("cleanupRepositoryStatus returns error when re-fetching repository fails", func() {
-			scheme := newBranchTestScheme()
+			testScheme := newBranchTestScheme()
 			branch := newErrorTestBranch()
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1585,13 +1585,13 @@ var _ = Describe("Branch Controller", func() {
 					},
 				},
 			}
-			baseClient := newBranchFakeClient(scheme, repo)
+			baseClient := newBranchFakeClient(testScheme, repo)
 			reconciler := &BranchReconciler{
 				Client: &repositoryGetErrorClient{
 					Client: baseClient,
 					err:    fmt.Errorf("get repo failed"),
 				},
-				Scheme: scheme,
+				Scheme: testScheme,
 			}
 			err := reconciler.cleanupRepositoryStatus(context.Background(), branch)
 			Expect(err).To(HaveOccurred())
@@ -1599,7 +1599,7 @@ var _ = Describe("Branch Controller", func() {
 		})
 
 		It("cleanupRepositoryStatus returns nil when nothing changed", func() {
-			scheme := newBranchTestScheme()
+			testScheme := newBranchTestScheme()
 			branch := newErrorTestBranch()
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1629,15 +1629,15 @@ var _ = Describe("Branch Controller", func() {
 				},
 			}
 			reconciler := &BranchReconciler{
-				Client: newBranchFakeClient(scheme, repo),
-				Scheme: scheme,
+				Client: newBranchFakeClient(testScheme, repo),
+				Scheme: testScheme,
 			}
 			err := reconciler.cleanupRepositoryStatus(context.Background(), branch)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("cleanupRepositoryStatus returns error when status update fails", func() {
-			scheme := newBranchTestScheme()
+			testScheme := newBranchTestScheme()
 			branch := newErrorTestBranch()
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1666,10 +1666,10 @@ var _ = Describe("Branch Controller", func() {
 					},
 				},
 			}
-			baseClient := newBranchFakeClient(scheme, repo)
+			baseClient := newBranchFakeClient(testScheme, repo)
 			reconciler := &BranchReconciler{
 				Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")},
-				Scheme: scheme,
+				Scheme: testScheme,
 			}
 			err := reconciler.cleanupRepositoryStatus(context.Background(), branch)
 			Expect(err).To(HaveOccurred())

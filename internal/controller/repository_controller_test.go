@@ -277,21 +277,21 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 			Expect(err.Error()).To(ContainSubstring(wantErr))
 		},
 		Entry("GitHubClientManager not initialized", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-gh-nil", "default", types.UID("repo-gh-nil-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-gh-nil", types.UID("repo-gh-nil-uid"))
 			prepareRepoForReconcile(repo)
-			baseClient := newFakeClientWithIndex(scheme, repo)
+			baseClient := newFakeClientWithIndex(testScheme, repo)
 			reconciler := &RepositoryReconciler{
 				Client: baseClient,
-				Scheme: scheme,
+				Scheme: testScheme,
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "GitHubClientManager not initialized"),
 		Entry("GetClientForRepository error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-gh-error", "default", types.UID("repo-gh-error-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-gh-error", types.UID("repo-gh-error-uid"))
 			prepareRepoForReconcile(repo)
-			baseClient := newFakeClientWithIndex(scheme, repo)
+			baseClient := newFakeClientWithIndex(testScheme, repo)
 			manager := &fakeGitHubClientManager{
 				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
 					return nil, fmt.Errorf("gh auth failed")
@@ -299,41 +299,41 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 			}
 			reconciler := &RepositoryReconciler{
 				Client:              baseClient,
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: manager,
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "gh auth failed"),
 		Entry("List Branch resources error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-list-error", "default", types.UID("repo-list-error-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-list-error", types.UID("repo-list-error-uid"))
 			prepareRepoForReconcile(repo)
-			baseClient := newFakeClientWithIndex(scheme, repo)
+			baseClient := newFakeClientWithIndex(testScheme, repo)
 			reconciler := &RepositoryReconciler{
 				Client:              &listErrorClient{Client: baseClient, err: fmt.Errorf("list failed")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "list failed"),
 		Entry("syncDefaultBranchCommits error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-default-sync-error", "default", types.UID("repo-default-sync-error-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-default-sync-error", types.UID("repo-default-sync-error-uid"))
 			prepareRepoForReconcile(repo)
 			repo.Status.DefaultBranchCommits = []terrakojoiov1alpha1.BranchInfo{
 				{Ref: "main", SHA: "0123456789abcdef0123456789abcdef01234567"},
 			}
-			baseClient := newFakeClientWithIndex(scheme, repo)
+			baseClient := newFakeClientWithIndex(testScheme, repo)
 			reconciler := &RepositoryReconciler{
 				Client:              &createErrorClient{Client: baseClient, err: fmt.Errorf("create failed")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "create failed"),
 		Entry("syncBranchList error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-branchlist-error", "default", types.UID("repo-branchlist-error-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-branchlist-error", types.UID("repo-branchlist-error-uid"))
 			prepareRepoForReconcile(repo)
 			oldSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			newSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -341,58 +341,58 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 				{Ref: "feature/error", SHA: newSHA},
 			}
 			existing := newTestBranch(repo, "feature/error", oldSHA, 0)
-			Expect(controllerutil.SetControllerReference(repo, existing, scheme)).To(Succeed())
-			baseClient := newFakeClientWithIndex(scheme, repo, existing)
+			Expect(controllerutil.SetControllerReference(repo, existing, testScheme)).To(Succeed())
+			baseClient := newFakeClientWithIndex(testScheme, repo, existing)
 			reconciler := &RepositoryReconciler{
 				Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete failed")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "delete failed"),
 		Entry("ensureLabels update error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-label-update-error", "default", types.UID("repo-label-update-error-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-label-update-error", types.UID("repo-label-update-error-uid"))
 			repo.Finalizers = []string{repositoryFinalizer}
-			baseClient := newFakeClientWithIndex(scheme, repo)
+			baseClient := newFakeClientWithIndex(testScheme, repo)
 			reconciler := &RepositoryReconciler{
 				Client:              &updateErrorClient{Client: baseClient, err: fmt.Errorf("update failed")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "failed to update Repository labels"),
 		Entry("syncBranchList stale delete error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-branchlist-stale-delete", "default", types.UID("repo-branchlist-stale-delete-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-branchlist-stale-delete", types.UID("repo-branchlist-stale-delete-uid"))
 			prepareRepoForReconcile(repo)
 			stale := newTestBranch(repo, "feature/stale", "1111111111111111111111111111111111111111", 0)
-			Expect(controllerutil.SetControllerReference(repo, stale, scheme)).To(Succeed())
-			baseClient := newFakeClientWithIndex(scheme, repo, stale)
+			Expect(controllerutil.SetControllerReference(repo, stale, testScheme)).To(Succeed())
+			baseClient := newFakeClientWithIndex(testScheme, repo, stale)
 			reconciler := &RepositoryReconciler{
 				Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete failed")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "delete failed"),
 		Entry("syncDefaultBranchCommits stale delete error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-default-stale-delete", "default", types.UID("repo-default-stale-delete-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-default-stale-delete", types.UID("repo-default-stale-delete-uid"))
 			prepareRepoForReconcile(repo)
 			stale := newTestBranch(repo, repo.Spec.DefaultBranch, "2222222222222222222222222222222222222222", 0)
-			Expect(controllerutil.SetControllerReference(repo, stale, scheme)).To(Succeed())
-			baseClient := newFakeClientWithIndex(scheme, repo, stale)
+			Expect(controllerutil.SetControllerReference(repo, stale, testScheme)).To(Succeed())
+			baseClient := newFakeClientWithIndex(testScheme, repo, stale)
 			reconciler := &RepositoryReconciler{
 				Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete failed")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "failed to delete stale default branch commit branch"),
 		Entry("updateBranchResource error", func() (*RepositoryReconciler, ctrl.Request) {
-			scheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-branch-update-error", "default", types.UID("repo-branch-update-error-uid"))
+			testScheme := newSchemeForGinkgo()
+			repo := newTestRepository("repo-branch-update-error", types.UID("repo-branch-update-error-uid"))
 			prepareRepoForReconcile(repo)
 			ref := "feature/update"
 			sha := "3333333333333333333333333333333333333333"
@@ -400,11 +400,11 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 				{Ref: ref, SHA: sha, PRNumber: 99},
 			}
 			existing := newTestBranch(repo, ref, sha, 1)
-			Expect(controllerutil.SetControllerReference(repo, existing, scheme)).To(Succeed())
-			baseClient := newFakeClientWithIndex(scheme, repo, existing)
+			Expect(controllerutil.SetControllerReference(repo, existing, testScheme)).To(Succeed())
+			baseClient := newFakeClientWithIndex(testScheme, repo, existing)
 			reconciler := &RepositoryReconciler{
 				Client:              &updateErrorClient{Client: baseClient, err: fmt.Errorf("update failed")},
-				Scheme:              scheme,
+				Scheme:              testScheme,
 				GitHubClientManager: &fakeGitHubClientManager{},
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
@@ -477,22 +477,22 @@ func (c *updateCaptureClient) Update(ctx context.Context, obj client.Object, opt
 }
 
 func newTestScheme(t *testing.T) *runtime.Scheme {
-	scheme := runtime.NewScheme()
-	require.NoError(t, terrakojoiov1alpha1.AddToScheme(scheme))
-	return scheme
+	testScheme := runtime.NewScheme()
+	require.NoError(t, terrakojoiov1alpha1.AddToScheme(testScheme))
+	return testScheme
 }
 
 func newSchemeForGinkgo() *runtime.Scheme {
-	scheme := runtime.NewScheme()
-	Expect(terrakojoiov1alpha1.AddToScheme(scheme)).To(Succeed())
-	return scheme
+	testScheme := runtime.NewScheme()
+	Expect(terrakojoiov1alpha1.AddToScheme(testScheme)).To(Succeed())
+	return testScheme
 }
 
-func newTestRepository(name, namespace string, uid types.UID) *terrakojoiov1alpha1.Repository {
+func newTestRepository(name string, uid types.UID) *terrakojoiov1alpha1.Repository {
 	return &terrakojoiov1alpha1.Repository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: namespace,
+			Namespace: "default",
 			UID:       uid,
 		},
 		Spec: terrakojoiov1alpha1.RepositorySpec{
@@ -523,9 +523,9 @@ func newTestBranch(repo *terrakojoiov1alpha1.Repository, ref, sha string, prNumb
 	}
 }
 
-func newFakeClientWithIndex(scheme *runtime.Scheme, objs ...client.Object) client.Client {
+func newFakeClientWithIndex(testScheme *runtime.Scheme, objs ...client.Object) client.Client {
 	builder := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(testScheme).
 		WithIndex(&terrakojoiov1alpha1.Branch{}, "metadata.ownerReferences.uid", indexByOwnerRepositoryUID)
 	if len(objs) > 0 {
 		builder.WithObjects(objs...)
@@ -580,15 +580,15 @@ func TestEnsureBranchResourceScenarios(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
-			scheme := newTestScheme(t)
-			repo := newTestRepository("repo-"+strings.ReplaceAll(tt.name, " ", "-"), "default", types.UID("repo-"+strings.ReplaceAll(tt.name, " ", "-")+"-uid"))
+			testScheme := newTestScheme(t)
+			repo := newTestRepository("repo-"+strings.ReplaceAll(tt.name, " ", "-"), types.UID("repo-"+strings.ReplaceAll(tt.name, " ", "-")+"-uid"))
 			branch := newTestBranch(repo, tt.ref, tt.existingSHA, tt.existingPR)
-			require.NoError(t, controllerutil.SetControllerReference(repo, branch, scheme))
+			require.NoError(t, controllerutil.SetControllerReference(repo, branch, testScheme))
 
-			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(repo, branch).Build()
+			fakeClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(repo, branch).Build()
 			reconciler := &RepositoryReconciler{
-				Client: client,
-				Scheme: scheme,
+				Client: fakeClient,
+				Scheme: testScheme,
 			}
 
 			err := reconciler.ensureBranchResource(ctx, repo, terrakojoiov1alpha1.BranchInfo{
@@ -600,21 +600,21 @@ func TestEnsureBranchResourceScenarios(t *testing.T) {
 
 			if tt.expectOldGone {
 				oldKey := types.NamespacedName{Name: branch.Name, Namespace: branch.Namespace}
-				require.True(t, apierrors.IsNotFound(client.Get(ctx, oldKey, &terrakojoiov1alpha1.Branch{})))
+				require.True(t, apierrors.IsNotFound(fakeClient.Get(ctx, oldKey, &terrakojoiov1alpha1.Branch{})))
 			}
 
 			if tt.expectNewNamed {
 				newName := fmt.Sprintf("%s-%s-%s", repo.Spec.Name, hashRef(tt.ref), shortSHA(tt.newSHA))
 				newKey := types.NamespacedName{Name: newName, Namespace: repo.Namespace}
 				created := &terrakojoiov1alpha1.Branch{}
-				require.NoError(t, client.Get(ctx, newKey, created))
+				require.NoError(t, fakeClient.Get(ctx, newKey, created))
 				require.Equal(t, tt.newSHA, created.Spec.SHA)
 				require.Equal(t, tt.newPR, created.Spec.PRNumber)
 				return
 			}
 
 			fetched := &terrakojoiov1alpha1.Branch{}
-			require.NoError(t, client.Get(ctx, types.NamespacedName{Name: branch.Name, Namespace: branch.Namespace}, fetched))
+			require.NoError(t, fakeClient.Get(ctx, types.NamespacedName{Name: branch.Name, Namespace: branch.Namespace}, fetched))
 			require.Equal(t, tt.newPR, fetched.Spec.PRNumber)
 		})
 	}
@@ -624,8 +624,8 @@ func TestSyncDefaultBranchCommitsCreatesAndDeletes(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	scheme := newTestScheme(t)
-	repo := newTestRepository("repo-default", "default", types.UID("repo-default-uid"))
+	testScheme := newTestScheme(t)
+	repo := newTestRepository("repo-default", types.UID("repo-default-uid"))
 	defaultRef := repo.Spec.DefaultBranch
 
 	shaKeep := "1111111111111111111111111111111111111111"
@@ -634,13 +634,13 @@ func TestSyncDefaultBranchCommitsCreatesAndDeletes(t *testing.T) {
 
 	branchKeep := newTestBranch(repo, defaultRef, shaKeep, 0)
 	branchStale := newTestBranch(repo, defaultRef, shaStale, 0)
-	require.NoError(t, controllerutil.SetControllerReference(repo, branchKeep, scheme))
-	require.NoError(t, controllerutil.SetControllerReference(repo, branchStale, scheme))
+	require.NoError(t, controllerutil.SetControllerReference(repo, branchKeep, testScheme))
+	require.NoError(t, controllerutil.SetControllerReference(repo, branchStale, testScheme))
 
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(repo, branchKeep, branchStale).Build()
+	fakeClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(repo, branchKeep, branchStale).Build()
 	reconciler := &RepositoryReconciler{
-		Client: client,
-		Scheme: scheme,
+		Client: fakeClient,
+		Scheme: testScheme,
 	}
 
 	repo.Status.DefaultBranchCommits = []terrakojoiov1alpha1.BranchInfo{
@@ -656,15 +656,15 @@ func TestSyncDefaultBranchCommitsCreatesAndDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	keepKey := types.NamespacedName{Name: branchKeep.Name, Namespace: branchKeep.Namespace}
-	require.NoError(t, client.Get(ctx, keepKey, &terrakojoiov1alpha1.Branch{}))
+	require.NoError(t, fakeClient.Get(ctx, keepKey, &terrakojoiov1alpha1.Branch{}))
 
 	staleKey := types.NamespacedName{Name: branchStale.Name, Namespace: branchStale.Namespace}
-	require.True(t, apierrors.IsNotFound(client.Get(ctx, staleKey, &terrakojoiov1alpha1.Branch{})))
+	require.True(t, apierrors.IsNotFound(fakeClient.Get(ctx, staleKey, &terrakojoiov1alpha1.Branch{})))
 
 	newName := fmt.Sprintf("%s-%s-%s", repo.Spec.Name, hashRef(defaultRef), shortSHA(shaNew))
 	newKey := types.NamespacedName{Name: newName, Namespace: repo.Namespace}
 	created := &terrakojoiov1alpha1.Branch{}
-	require.NoError(t, client.Get(ctx, newKey, created))
+	require.NoError(t, fakeClient.Get(ctx, newKey, created))
 	require.Equal(t, shaNew, created.Spec.SHA)
 	require.Equal(t, defaultRef, created.Spec.Name)
 
@@ -675,7 +675,7 @@ func TestSyncDefaultBranchCommitsCreatesAndDeletes(t *testing.T) {
 func TestReconcileDeletionScenarios(t *testing.T) {
 	tests := []struct {
 		name                   string
-		setupClient            func(t *testing.T, repo *terrakojoiov1alpha1.Repository, scheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient)
+		setupClient            func(t *testing.T, repo *terrakojoiov1alpha1.Repository, testScheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient)
 		expectErrContains      string
 		expectRequeueAfter     time.Duration
 		expectFinalizerRemoved bool
@@ -683,8 +683,8 @@ func TestReconcileDeletionScenarios(t *testing.T) {
 	}{
 		{
 			name: "cleanup error",
-			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, scheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
-				baseClient := newFakeClientWithIndex(scheme, repo)
+			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, testScheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
+				baseClient := newFakeClientWithIndex(testScheme, repo)
 				return baseClient, &listErrorClient{Client: baseClient, err: fmt.Errorf("list failed")}, nil
 			},
 			expectErrContains:      "list failed",
@@ -692,10 +692,10 @@ func TestReconcileDeletionScenarios(t *testing.T) {
 		},
 		{
 			name: "requeue when branches remain",
-			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, scheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
+			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, testScheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
 				branch := newTestBranch(repo, "main", "7777777777777777777777777777777777777777", 0)
-				require.NoError(t, controllerutil.SetControllerReference(repo, branch, scheme))
-				baseClient := newFakeClientWithIndex(scheme, repo, branch)
+				require.NoError(t, controllerutil.SetControllerReference(repo, branch, testScheme))
+				baseClient := newFakeClientWithIndex(testScheme, repo, branch)
 				return baseClient, &deleteNoopClient{Client: baseClient}, nil
 			},
 			expectRequeueAfter:     5 * time.Second,
@@ -703,8 +703,8 @@ func TestReconcileDeletionScenarios(t *testing.T) {
 		},
 		{
 			name: "removes finalizer on success",
-			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, scheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
-				baseClient := newFakeClientWithIndex(scheme, repo)
+			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, testScheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
+				baseClient := newFakeClientWithIndex(testScheme, repo)
 				captureClient := &updateCaptureClient{Client: baseClient}
 				return baseClient, captureClient, captureClient
 			},
@@ -712,8 +712,8 @@ func TestReconcileDeletionScenarios(t *testing.T) {
 		},
 		{
 			name: "finalizer update error",
-			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, scheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
-				baseClient := newFakeClientWithIndex(scheme, repo)
+			setupClient: func(t *testing.T, repo *terrakojoiov1alpha1.Repository, testScheme *runtime.Scheme) (client.Client, client.Client, *updateCaptureClient) {
+				baseClient := newFakeClientWithIndex(testScheme, repo)
 				return baseClient, &updateErrorClient{Client: baseClient, err: fmt.Errorf("update failed")}, nil
 			},
 			expectErrContains:      "update failed",
@@ -726,17 +726,17 @@ func TestReconcileDeletionScenarios(t *testing.T) {
 			t.Parallel()
 
 			ctx := context.Background()
-			scheme := newTestScheme(t)
+			testScheme := newTestScheme(t)
 			safeName := strings.ReplaceAll(tt.name, " ", "-")
-			repo := newTestRepository("repo-delete-"+safeName, "default", types.UID("repo-delete-"+safeName+"-uid"))
+			repo := newTestRepository("repo-delete-"+safeName, types.UID("repo-delete-"+safeName+"-uid"))
 			now := metav1.NewTime(time.Now())
 			repo.DeletionTimestamp = &now
 			repo.Finalizers = []string{repositoryFinalizer}
 
-			baseClient, clientToUse, captureClient := tt.setupClient(t, repo, scheme)
+			baseClient, clientToUse, captureClient := tt.setupClient(t, repo, testScheme)
 			reconciler := &RepositoryReconciler{
 				Client: clientToUse,
-				Scheme: scheme,
+				Scheme: testScheme,
 			}
 
 			result, err := reconciler.Reconcile(ctx, ctrl.Request{

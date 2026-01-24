@@ -24,10 +24,12 @@ type Handler struct {
 	client        client.Client
 }
 
+const prActionClosed = "closed"
+
 // NewHandler creates a new platform-agnostic webhook handler
-func NewHandler(config *config.Config, kubeClient client.Client) (*Handler, error) {
+func NewHandler(cfg *config.Config, kubeClient client.Client) (*Handler, error) {
 	// Initialize GitHub webhook
-	githubWebhook, err := github.New(github.Options.Secret(config.WebhookGithubSecret))
+	githubWebhook, err := github.New(github.Options.Secret(cfg.WebhookGithubSecret))
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +77,7 @@ func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	switch event := payload.(type) {
 	case github.PullRequestPayload:
 		log.Printf("Processing GitHub pull request event: action=%s, PR #%d, repo=%s, branch=%s, sha=%s",
-			string(event.Action), event.PullRequest.Number, event.Repository.FullName, event.PullRequest.Head.Ref, event.PullRequest.Head.Sha)
+			event.Action, event.PullRequest.Number, event.Repository.FullName, event.PullRequest.Head.Ref, event.PullRequest.Head.Sha)
 		webhookInfo = ghpkg.ProcessPullRequestEvent(event)
 
 	case github.PushPayload:
@@ -97,7 +99,9 @@ func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Respond to GitHub immediately
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	if _, err := w.Write([]byte("OK")); err != nil {
+		log.Printf("Failed to write webhook response: %v", err)
+	}
 
 	if webhookInfo == nil {
 		return
@@ -212,7 +216,7 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 
 		// Default branch (push/merge): enqueue commit to defaultBranchCommits.
 		if (webhookInfo.EventType == ghpkg.EventTypePush ||
-			(webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == "closed" && webhookInfo.Merged)) &&
+			(webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == prActionClosed && webhookInfo.Merged)) &&
 			branchInfo.Ref == repo.Spec.DefaultBranch {
 			before := len(repo.Status.DefaultBranchCommits)
 			exists := false
@@ -240,7 +244,7 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 		}
 
 		// PR open/synchronize: replace latest SHA for non-default branch.
-		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action != "closed" {
+		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action != prActionClosed {
 			// Only update BranchList for non-default branches
 			if branchInfo.Ref != repo.Spec.DefaultBranch {
 				var branchChanged bool
@@ -252,7 +256,7 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 		}
 
 		// PR closed (merged/non-merged): remove PR head branch entry from list; leave defaultBranchCommits untouched.
-		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == "closed" {
+		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == prActionClosed {
 			prHeadRef := webhookInfo.BranchName
 			// Do not attempt to remove the default branch from BranchList
 			if prHeadRef != repo.Spec.DefaultBranch {

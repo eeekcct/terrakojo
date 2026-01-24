@@ -58,6 +58,8 @@ const (
 	WorkflowPhaseCancelled WorkflowPhase = "Cancelled"
 
 	workflowFinalizer = "terrakojo.io/cleanup-checkrun"
+
+	checkRunStatusCompleted = "completed"
 )
 
 // WorkflowReconciler reconciles a Workflow object
@@ -82,6 +84,8 @@ type WorkflowReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/reconcile
+//
+//nolint:gocyclo // Reconcile handles multiple workflow lifecycle paths.
 func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -129,7 +133,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Handle deletion first so we can finalize and report cancellation
-	if !workflow.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !workflow.DeletionTimestamp.IsZero() {
 		if !controllerutil.ContainsFinalizer(&workflow, workflowFinalizer) {
 			return ctrl.Result{}, nil
 		}
@@ -180,7 +184,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err == nil {
 		// Job exists, update workflow status based on job status
 		phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
-		status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
+		status, conclusion := r.checkRunStatus(phase)
 		err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -246,7 +250,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	workflow.Status.Jobs = append(workflow.Status.Jobs, job.Name)
 	phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
-	status, conclusion := r.checkRunStatus(ctx, &workflow, phase)
+	status, conclusion := r.checkRunStatus(phase)
 	err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -290,7 +294,7 @@ func (r *WorkflowReconciler) handleWorkflowDeletion(ctx context.Context, ghClien
 	checkRunID := int64(workflow.Status.CheckRunID)
 	checkRunName := workflow.Status.CheckRunName
 
-	status, conclusion := r.checkRunStatus(ctx, workflow, WorkflowPhaseCancelled)
+	status, conclusion := r.checkRunStatus(WorkflowPhaseCancelled)
 	if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion); err != nil {
 		return err
 	}
@@ -397,7 +401,7 @@ func (r *WorkflowReconciler) updateWorkflowStatusWithRetry(ctx context.Context, 
 	})
 }
 
-func (r *WorkflowReconciler) checkRunStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) (string, string) {
+func (r *WorkflowReconciler) checkRunStatus(phase WorkflowPhase) (string, string) {
 	var status, conclusion string
 	switch phase {
 	case WorkflowPhasePending:
@@ -407,13 +411,13 @@ func (r *WorkflowReconciler) checkRunStatus(ctx context.Context, workflow *terra
 		status = "in_progress"
 		conclusion = ""
 	case WorkflowPhaseSucceeded:
-		status = "completed"
+		status = checkRunStatusCompleted
 		conclusion = "success"
 	case WorkflowPhaseFailed:
-		status = "completed"
+		status = checkRunStatusCompleted
 		conclusion = "failure"
 	case WorkflowPhaseCancelled:
-		status = "completed"
+		status = checkRunStatusCompleted
 		conclusion = "cancelled"
 	default:
 		status = "queued"
