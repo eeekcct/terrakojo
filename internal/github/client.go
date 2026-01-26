@@ -109,6 +109,8 @@ func newGitHubClient(httpClient *http.Client) (*github.Client, error) {
 		return github.NewClient(httpClient), nil
 	}
 
+	// github.NewEnterpriseClient lets us target a custom GitHub API base URL
+	// (e.g. GitHub Enterprise or a local mock server).
 	if apiURL == "" {
 		apiURL = "https://api.github.com/"
 	}
