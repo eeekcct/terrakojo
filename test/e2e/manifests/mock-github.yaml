@@ -94,11 +94,16 @@ spec:
             - name: config
               mountPath: /app
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
+              readOnly: false
       volumes:
         - name: config
           configMap:
             name: mock-github-config
             defaultMode: 0555
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
