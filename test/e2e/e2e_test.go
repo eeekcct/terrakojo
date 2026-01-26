@@ -20,6 +20,8 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -44,6 +46,9 @@ const metricsServiceName = "terrakojo-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "terrakojo-metrics-binding"
+const webhookSecret = "test-secret"
+const webhookServiceName = "terrakojo-webhook-server"
+const mockGitHubServiceName = "mock-github"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -72,6 +77,46 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+
+		By("deploying the mock GitHub API")
+		cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/manifests/mock-github.yaml")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to deploy mock GitHub API")
+
+		By("waiting for the mock GitHub API deployment to be ready")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/mock-github", "-n", namespace, "--timeout=2m")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Mock GitHub API deployment not ready")
+
+		By("configuring the controller manager to use the mock GitHub API")
+		apiURL := fmt.Sprintf("http://%s.%s.svc.cluster.local/api/v3/", mockGitHubServiceName, namespace)
+		uploadURL := fmt.Sprintf("http://%s.%s.svc.cluster.local/api/uploads/", mockGitHubServiceName, namespace)
+		cmd = exec.Command("kubectl", "set", "env", "deployment/terrakojo-controller-manager", "-n", namespace,
+			fmt.Sprintf("GITHUB_API_URL=%s", apiURL),
+			fmt.Sprintf("GITHUB_UPLOAD_URL=%s", uploadURL),
+		)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to set GitHub API env vars on controller manager")
+
+		By("waiting for the controller-manager rollout after env updates")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/terrakojo-controller-manager", "-n", namespace, "--timeout=2m")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Controller manager rollout after env updates failed")
+
+		By("creating the test repository and webhook secret")
+		cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/manifests/repository.yaml")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply repository and secret manifest")
+
+		By("deploying the webhook server")
+		cmd = exec.Command("kubectl", "apply", "-k", "test/e2e/manifests/webhook")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to deploy webhook server")
+
+		By("waiting for the webhook server deployment to be ready")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/terrakojo-webhook-server", "-n", namespace, "--timeout=2m")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Webhook server deployment not ready")
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
@@ -79,6 +124,10 @@ var _ = Describe("Manager", Ordered, func() {
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		_, _ = utils.Run(cmd)
+
+		By("cleaning up the curl pod for webhook")
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-webhook", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -263,6 +312,35 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
 		})
 
+		It("should update repository status via GitHub webhook push", func() {
+			By("waiting for repository labels to be set")
+			verifyRepositoryLabels := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={.metadata.labels.terrakojo\\.io/owner}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("octo"))
+			}
+			Eventually(verifyRepositoryLabels, 2*time.Minute).Should(Succeed())
+
+			By("sending a GitHub push webhook to the webhook server")
+			payload := []byte(`{"ref":"refs/heads/main","after":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef","repository":{"name":"demo","full_name":"octo/demo","owner":{"login":"octo"}}}`)
+			signature := signWebhookPayload(webhookSecret, payload)
+			output, err := sendWebhookPayload(signature, string(payload))
+			Expect(err).NotTo(HaveOccurred(), "Failed to send webhook payload")
+			Expect(output).To(Equal("200"), "Unexpected webhook response code")
+
+			By("verifying repository status reflects the pushed commit")
+			verifyRepositoryStatus := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={.status.defaultBranchCommits[0].sha}")
+				statusOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(statusOutput).To(Equal("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
+			}
+			Eventually(verifyRepositoryStatus, 2*time.Minute).Should(Succeed())
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
@@ -322,6 +400,88 @@ func serviceAccountToken() (string, error) {
 func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
+	return utils.Run(cmd)
+}
+
+func signWebhookPayload(secret string, payload []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(payload)
+	return fmt.Sprintf("%x", mac.Sum(nil))
+}
+
+func sendWebhookPayload(signature, payload string) (string, error) {
+	args := []string{
+		"-s",
+		"-o",
+		"/dev/null",
+		"-w",
+		"%{http_code}",
+		"-X",
+		"POST",
+		"-H",
+		"X-GitHub-Event: push",
+		"-H",
+		"X-GitHub-Delivery: e2e-1",
+		"-H",
+		fmt.Sprintf("X-Hub-Signature-256: sha256=%s", signature),
+		"-H",
+		"Content-Type: application/json",
+		"--data-raw",
+		payload,
+		fmt.Sprintf("http://%s.%s.svc.cluster.local/webhook", webhookServiceName, namespace),
+	}
+
+	overrides := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"restartPolicy": "Never",
+			"securityContext": map[string]interface{}{
+				"runAsNonRoot": true,
+				"runAsUser":    1000,
+				"seccompProfile": map[string]interface{}{
+					"type": "RuntimeDefault",
+				},
+			},
+			"containers": []map[string]interface{}{
+				{
+					"name":    "curl",
+					"image":   "curlimages/curl:latest",
+					"command": []string{"curl"},
+					"args":    args,
+					"securityContext": map[string]interface{}{
+						"readOnlyRootFilesystem":   true,
+						"allowPrivilegeEscalation": false,
+						"capabilities": map[string]interface{}{
+							"drop": []string{"ALL"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	rawOverrides, err := json.Marshal(overrides)
+	if err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command("kubectl", "run", "curl-webhook", "--restart=Never", "--namespace", namespace,
+		"--image=curlimages/curl:latest",
+		"--overrides", string(rawOverrides))
+	if _, err := utils.Run(cmd); err != nil {
+		return "", err
+	}
+
+	verifyCurlUp := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "pods", "curl-webhook",
+			"-o", "jsonpath={.status.phase}",
+			"-n", namespace)
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).To(Equal("Succeeded"), "curl webhook pod in wrong status")
+	}
+	Eventually(verifyCurlUp, 2*time.Minute).Should(Succeed())
+
+	cmd = exec.Command("kubectl", "logs", "curl-webhook", "-n", namespace)
 	return utils.Run(cmd)
 }
 

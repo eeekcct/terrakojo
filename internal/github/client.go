@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/eeekcct/terrakojo/internal/config"
@@ -53,7 +55,10 @@ func NewClient(ctx context.Context, cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create GitHub installation transport: %w", err)
 	}
 
-	client := github.NewClient(&http.Client{Transport: itr})
+	client, err := newGitHubClient(&http.Client{Transport: itr})
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		ctx:    ctx,
 		client: client,
@@ -61,7 +66,7 @@ func NewClient(ctx context.Context, cfg *config.Config) (*Client, error) {
 }
 
 // NewClientFromCredentials creates a GitHub client from specific credentials
-func NewClientFromCredentials(ctx context.Context, creds *GitHubCredentials) (*Client, error) {
+func NewClientFromCredentials(ctx context.Context, creds *GitHubCredentials) (ClientInterface, error) {
 	var httpClient *http.Client
 
 	switch creds.Type {
@@ -87,11 +92,41 @@ func NewClientFromCredentials(ctx context.Context, creds *GitHubCredentials) (*C
 		return nil, fmt.Errorf("unsupported authentication type: %s", creds.Type)
 	}
 
-	client := github.NewClient(httpClient)
+	client, err := newGitHubClient(httpClient)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		ctx:    ctx,
 		client: client,
 	}, nil
+}
+
+func newGitHubClient(httpClient *http.Client) (*github.Client, error) {
+	apiURL := strings.TrimSpace(os.Getenv("GITHUB_API_URL"))
+	uploadURL := strings.TrimSpace(os.Getenv("GITHUB_UPLOAD_URL"))
+	if apiURL == "" && uploadURL == "" {
+		return github.NewClient(httpClient), nil
+	}
+
+	if apiURL == "" {
+		apiURL = "https://api.github.com/"
+	}
+	apiURL = ensureTrailingSlash(apiURL)
+
+	if uploadURL == "" {
+		uploadURL = apiURL
+	}
+	uploadURL = ensureTrailingSlash(uploadURL)
+
+	return github.NewEnterpriseClient(apiURL, uploadURL, httpClient)
+}
+
+func ensureTrailingSlash(value string) string {
+	if !strings.HasSuffix(value, "/") {
+		return value + "/"
+	}
+	return value
 }
 
 func (c *Client) GetChangedFiles(owner, repo string, prNumber int) ([]string, error) {

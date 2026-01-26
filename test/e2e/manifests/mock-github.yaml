@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-github-config
+  namespace: terrakojo-system
+data:
+  server.py: |
+    import json
+    import re
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, code, body):
+            data = json.dumps(body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/commits/[^/]+$", self.path):
+                self._send(200, {"files": [{"filename": "README.md"}]})
+                return
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/pulls/\d+/files$", self.path):
+                self._send(200, [{"filename": "README.md"}])
+                return
+            self._send(404, {"message": "not found"})
+
+        def do_POST(self):
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs$", self.path):
+                self._send(201, {"id": 101, "status": "queued"})
+                return
+            self._send(404, {"message": "not found"})
+
+        def do_PATCH(self):
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs/\d+$", self.path):
+                check_run_id = int(self.path.split("/")[-1])
+                self._send(200, {"id": check_run_id, "status": "completed"})
+                return
+            self._send(404, {"message": "not found"})
+
+        def log_message(self, format, *args):
+            return
+
+
+    def main():
+        server = HTTPServer(("", 8080), Handler)
+        server.serve_forever()
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-github
+  namespace: terrakojo-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-github
+  template:
+    metadata:
+      labels:
+        app: mock-github
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mock-github
+          image: python:3.12-alpine
+          command:
+            - python
+            - /app/server.py
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - "ALL"
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: mock-github-config
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-github
+  namespace: terrakojo-system
+spec:
+  selector:
+    app: mock-github
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

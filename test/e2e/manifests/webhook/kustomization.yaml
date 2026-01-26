@@ -1,0 +1,10 @@
+namespace: terrakojo-system
+namePrefix: terrakojo-
+
+resources:
+  - ../../../config/webhook
+
+images:
+  - name: controller
+    newName: example.com/terrakojo
+    newTag: v0.0.1

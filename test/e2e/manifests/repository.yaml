@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-token
+  namespace: terrakojo-system
+stringData:
+  token: fake-token
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-webhook-secret
+  namespace: terrakojo-system
+stringData:
+  webhook-secret: test-secret
+---
+apiVersion: terrakojo.io/v1alpha1
+kind: Repository
+metadata:
+  name: demo-repo
+  namespace: terrakojo-system
+spec:
+  owner: octo
+  name: demo
+  type: github
+  defaultBranch: main
+  githubSecretRef:
+    name: github-token
