@@ -148,7 +148,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("removing workflow template")
-		cmd = exec.Command("kubectl", "delete", "workflowtemplate", "demo-workflow", "-n", namespace, "--ignore-not-found=true", "--wait=false")
+		cmd = exec.Command("kubectl", "delete", "-f", "test/e2e/manifests/workflowtemplate.yaml", "--ignore-not-found=true", "--wait=false")
 		_, _ = utils.Run(cmd)
 
 		By("waiting for workflow cleanup before undeploy")
@@ -160,11 +160,11 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("waiting for repository cleanup before undeploy")
-		cmd = exec.Command("kubectl", "wait", "--for=delete", "repository", "demo-repo", "-n", namespace, "--timeout=3m")
+		cmd = exec.Command("kubectl", "wait", "-f", "test/e2e/manifests/repository.yaml", "--for=delete", "--timeout=3m", "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
 		By("waiting for workflow template cleanup before undeploy")
-		cmd = exec.Command("kubectl", "wait", "--for=delete", "workflowtemplate", "demo-workflow", "-n", namespace, "--timeout=3m")
+		cmd = exec.Command("kubectl", "wait", "-f", "test/e2e/manifests/workflowtemplate.yaml", "--for=delete", "--timeout=3m", "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
 		By("removing webhook resources")
