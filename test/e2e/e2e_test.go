@@ -135,20 +135,35 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("kubectl", "delete", "pod", "curl-webhook", "-n", namespace, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
+		By("removing repository resources")
+		cmd = exec.Command("kubectl", "delete", "repository", "demo-repo", "-n", namespace, "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+
+		By("waiting for repository deletion before undeploy")
+		cmd = exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace)
+		if _, err := utils.Run(cmd); err == nil {
+			cmd = exec.Command("kubectl", "wait", "--for=delete", "repository/demo-repo", "-n", namespace, "--timeout=3m")
+			_, _ = utils.Run(cmd)
+		}
+
+		By("removing workflow template")
+		cmd = exec.Command("kubectl", "delete", "workflowtemplate", "demo-workflow", "-n", namespace, "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+
 		By("removing webhook resources")
-		cmd = exec.Command("kubectl", "delete", "-k", "test/e2e/manifests/webhook", "--ignore-not-found=true", "--wait=false")
+		cmd = exec.Command("kubectl", "delete", "-k", "test/e2e/manifests/webhook", "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
-		cmd = exec.Command("kubectl", "delete", "-k", "config/default", "--ignore-not-found=true", "--wait=false")
+		cmd = exec.Command("make", "undeploy")
 		_, _ = utils.Run(cmd)
 
 		By("uninstalling CRDs")
-		cmd = exec.Command("kubectl", "delete", "-k", "config/crd", "--ignore-not-found=true", "--wait=false")
+		cmd = exec.Command("make", "uninstall")
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found=true", "--wait=false")
+		cmd = exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 	})
 
