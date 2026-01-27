@@ -1,0 +1,17 @@
+apiVersion: terrakojo.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: demo-workflow
+  namespace: terrakojo-system
+spec:
+  displayName: "Demo Workflow"
+  match:
+    paths:
+      - "infra/**/*.tf"
+  steps:
+    - name: "sleep"
+      image: "busybox:1.36"
+      command:
+        - "/bin/sh"
+        - "-c"
+        - "sleep 5"

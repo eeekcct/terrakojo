@@ -108,6 +108,11 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to apply repository and secret manifest")
 
+		By("creating the workflow template")
+		cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/manifests/workflowtemplate.yaml")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply workflow template manifest")
+
 		By("deploying the webhook server")
 		cmd = exec.Command("kubectl", "apply", "-k", "test/e2e/manifests/webhook")
 		_, err = utils.Run(cmd)
@@ -330,24 +335,126 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to send webhook payload")
 			Expect(output).To(Equal("200"), "Unexpected webhook response code")
 
-		By("verifying repository status reflects the pushed commit")
-		verifyRepositoryStatus := func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
-				"-o", "jsonpath={.status.defaultBranchCommits[0].sha}")
-			statusOutput, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			if statusOutput == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" {
-				return
-			}
+			By("verifying repository status reflects the pushed commit")
+			verifyRepositoryStatus := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={.status.defaultBranchCommits[0].sha}")
+				statusOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				if statusOutput == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" {
+					return
+				}
 
-			cmd = exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
-				"-o", "jsonpath={.status.synced}")
-			syncedOutput, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(syncedOutput).To(Equal("true"))
-		}
-		Eventually(verifyRepositoryStatus, 2*time.Minute).Should(Succeed())
-	})
+				cmd = exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={.status.synced}")
+				syncedOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(syncedOutput).To(Equal("true"))
+			}
+			Eventually(verifyRepositoryStatus, 2*time.Minute).Should(Succeed())
+
+			By("waiting for a workflow to be created")
+			var workflowName string
+			verifyWorkflowCreated := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workflows", "-n", namespace,
+					"-o", "jsonpath={.items[0].metadata.name}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty())
+				workflowName = output
+			}
+			Eventually(verifyWorkflowCreated, 2*time.Minute).Should(Succeed())
+
+			By("verifying workflow has a check run assigned")
+			verifyWorkflowCheckRun := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "workflow", workflowName, "-n", namespace,
+					"-o", "jsonpath={.status.checkRunID}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty())
+			}
+			Eventually(verifyWorkflowCheckRun, 2*time.Minute).Should(Succeed())
+
+			By("verifying check run is completed in mock GitHub")
+			verifyCheckRunCompleted := func(g Gomega) {
+				snapshot, err := fetchMockGitHubCheckRuns()
+				g.Expect(err).NotTo(HaveOccurred())
+				found := false
+				for _, run := range snapshot.CheckRuns {
+					if run.Status == "completed" && run.Conclusion == "success" {
+						found = true
+						break
+					}
+				}
+				g.Expect(found).To(BeTrue())
+			}
+			Eventually(verifyCheckRunCompleted, 5*time.Minute).Should(Succeed())
+		})
+
+		It("should handle pull request opened and merged events", func() {
+			By("sending a GitHub pull request opened webhook")
+			prOpenedPayload := []byte(`{"action":"opened","number":3,"pull_request":{"number":3,"state":"open","merged":false,"head":{"ref":"feature/auth","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"base":{"ref":"main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},"repository":{"name":"demo","full_name":"octo/demo","owner":{"login":"octo"}}}`)
+			signature := signWebhookPayload(webhookSecret, prOpenedPayload)
+			output, err := sendWebhookPayloadWithEvent("pull_request", signature, string(prOpenedPayload))
+			Expect(err).NotTo(HaveOccurred(), "Failed to send pull request opened webhook")
+			Expect(output).To(Equal("200"), "Unexpected webhook response code")
+
+			By("verifying repository status tracks the PR branch")
+			verifyPRBranchListed := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={range .status.branchList[*]}{.ref}:{.sha}{\"\\n\"}{end}")
+				listOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				lines := utils.GetNonEmptyLines(listOutput)
+				found := false
+				for _, line := range lines {
+					if line == "feature/auth:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+						found = true
+						break
+					}
+				}
+				g.Expect(found).To(BeTrue())
+			}
+			Eventually(verifyPRBranchListed, 2*time.Minute).Should(Succeed())
+
+			By("sending a GitHub pull request merged webhook")
+			prMergedPayload := []byte(`{"action":"closed","number":3,"pull_request":{"number":3,"state":"closed","merged":true,"merge_commit_sha":"cccccccccccccccccccccccccccccccccccccccc","head":{"ref":"feature/auth","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"base":{"ref":"main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},"repository":{"name":"demo","full_name":"octo/demo","owner":{"login":"octo"}}}`)
+			signature = signWebhookPayload(webhookSecret, prMergedPayload)
+			output, err = sendWebhookPayloadWithEvent("pull_request", signature, string(prMergedPayload))
+			Expect(err).NotTo(HaveOccurred(), "Failed to send pull request merged webhook")
+			Expect(output).To(Equal("200"), "Unexpected webhook response code")
+
+			By("verifying the PR branch is removed from repository status")
+			verifyPRBranchRemoved := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={range .status.branchList[*]}{.ref}{\"\\n\"}{end}")
+				listOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				lines := utils.GetNonEmptyLines(listOutput)
+				for _, line := range lines {
+					g.Expect(line).NotTo(Equal("feature/auth"))
+				}
+			}
+			Eventually(verifyPRBranchRemoved, 2*time.Minute).Should(Succeed())
+
+			By("verifying the merge commit is queued on the default branch")
+			verifyMergeCommitQueued := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={range .status.defaultBranchCommits[*]}{.sha}{\"\\n\"}{end}")
+				commitsOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				lines := utils.GetNonEmptyLines(commitsOutput)
+				found := false
+				for _, line := range lines {
+					if line == "cccccccccccccccccccccccccccccccccccccccc" {
+						found = true
+						break
+					}
+				}
+				g.Expect(found).To(BeTrue())
+			}
+			Eventually(verifyMergeCommitQueued, 2*time.Minute).Should(Succeed())
+		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
@@ -418,6 +525,10 @@ func signWebhookPayload(secret string, payload []byte) string {
 }
 
 func sendWebhookPayload(signature, payload string) (string, error) {
+	return sendWebhookPayloadWithEvent("push", signature, payload)
+}
+
+func sendWebhookPayloadWithEvent(event, signature, payload string) (string, error) {
 	args := []string{
 		"-s",
 		"-o",
@@ -427,7 +538,7 @@ func sendWebhookPayload(signature, payload string) (string, error) {
 		"-X",
 		"POST",
 		"-H",
-		"X-GitHub-Event: push",
+		fmt.Sprintf("X-GitHub-Event: %s", event),
 		"-H",
 		"X-GitHub-Delivery: e2e-1",
 		"-H",
@@ -439,6 +550,39 @@ func sendWebhookPayload(signature, payload string) (string, error) {
 		fmt.Sprintf("http://%s.%s.svc.cluster.local/webhook", webhookServiceName, namespace),
 	}
 
+	name := fmt.Sprintf("curl-webhook-%d", time.Now().UnixNano())
+	return runCurlPod(name, args)
+}
+
+type checkRunSnapshot struct {
+	CheckRuns []checkRunRecord `json:"check_runs"`
+}
+
+type checkRunRecord struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+}
+
+func fetchMockGitHubCheckRuns() (*checkRunSnapshot, error) {
+	args := []string{
+		"-s",
+		fmt.Sprintf("http://%s.%s.svc.cluster.local/api/v3/_meta/check-runs", mockGitHubServiceName, namespace),
+	}
+	name := fmt.Sprintf("curl-github-%d", time.Now().UnixNano())
+	output, err := runCurlPod(name, args)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot checkRunSnapshot
+	if err := json.Unmarshal([]byte(output), &snapshot); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func runCurlPod(name string, args []string) (string, error) {
 	overrides := map[string]interface{}{
 		"spec": map[string]interface{}{
 			"restartPolicy": "Never",
@@ -472,7 +616,7 @@ func sendWebhookPayload(signature, payload string) (string, error) {
 		return "", err
 	}
 
-	cmd := exec.Command("kubectl", "run", "curl-webhook", "--restart=Never", "--namespace", namespace,
+	cmd := exec.Command("kubectl", "run", name, "--restart=Never", "--namespace", namespace,
 		"--image=curlimages/curl:latest",
 		"--overrides", string(rawOverrides))
 	if _, err := utils.Run(cmd); err != nil {
@@ -480,17 +624,22 @@ func sendWebhookPayload(signature, payload string) (string, error) {
 	}
 
 	verifyCurlUp := func(g Gomega) {
-		cmd := exec.Command("kubectl", "get", "pods", "curl-webhook",
+		cmd := exec.Command("kubectl", "get", "pods", name,
 			"-o", "jsonpath={.status.phase}",
 			"-n", namespace)
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(output).To(Equal("Succeeded"), "curl webhook pod in wrong status")
+		g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
 	}
 	Eventually(verifyCurlUp, 2*time.Minute).Should(Succeed())
 
-	cmd = exec.Command("kubectl", "logs", "curl-webhook", "-n", namespace)
-	return utils.Run(cmd)
+	cmd = exec.Command("kubectl", "logs", name, "-n", namespace)
+	output, err := utils.Run(cmd)
+
+	cmd = exec.Command("kubectl", "delete", "pod", name, "-n", namespace)
+	_, _ = utils.Run(cmd)
+
+	return output, err
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,

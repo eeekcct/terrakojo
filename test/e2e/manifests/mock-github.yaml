@@ -10,6 +10,9 @@ data:
     from urllib.parse import urlparse
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
+    CHECK_RUNS = {}
+    NEXT_CHECK_RUN_ID = 100
+
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body):
             data = json.dumps(body).encode("utf-8")
@@ -19,20 +22,43 @@ data:
             self.end_headers()
             self.wfile.write(data)
 
+        def _read_json(self):
+            length = int(self.headers.get("Content-Length", 0))
+            if length <= 0:
+                return {}
+            try:
+                return json.loads(self.rfile.read(length))
+            except json.JSONDecodeError:
+                return {}
+
         def do_GET(self):
             path = urlparse(self.path).path
+            if path == "/api/v3/_meta/check-runs":
+                self._send(200, {"check_runs": list(CHECK_RUNS.values())})
+                return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/commits/[^/]+$", path):
-                self._send(200, {"files": [{"filename": "README.md"}]})
+                self._send(200, {"files": [{"filename": "infra/main.tf"}]})
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/pulls/\d+/files$", path):
-                self._send(200, [{"filename": "README.md"}])
+                self._send(200, [{"filename": "infra/main.tf"}])
                 return
             self._send(404, {"message": "not found"})
 
         def do_POST(self):
             path = urlparse(self.path).path
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs$", path):
-                self._send(201, {"id": 101, "status": "queued"})
+                global NEXT_CHECK_RUN_ID
+                payload = self._read_json()
+                NEXT_CHECK_RUN_ID += 1
+                check_run_id = NEXT_CHECK_RUN_ID
+                check_run = {
+                    "id": check_run_id,
+                    "name": payload.get("name", ""),
+                    "status": payload.get("status", "queued"),
+                    "conclusion": payload.get("conclusion", ""),
+                }
+                CHECK_RUNS[str(check_run_id)] = check_run
+                self._send(201, check_run)
                 return
             self._send(404, {"message": "not found"})
 
@@ -40,7 +66,14 @@ data:
             path = urlparse(self.path).path
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs/\d+$", path):
                 check_run_id = int(path.split("/")[-1])
-                self._send(200, {"id": check_run_id, "status": "completed"})
+                payload = self._read_json()
+                check_run = CHECK_RUNS.get(str(check_run_id), {"id": check_run_id})
+                if "status" in payload:
+                    check_run["status"] = payload["status"]
+                if "conclusion" in payload:
+                    check_run["conclusion"] = payload["conclusion"]
+                CHECK_RUNS[str(check_run_id)] = check_run
+                self._send(200, check_run)
                 return
             self._send(404, {"message": "not found"})
 
