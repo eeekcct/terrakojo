@@ -24,11 +24,9 @@ jobs:
           sudo mv ./kind /usr/local/bin/kind
 
       - name: Install kubectl
-        run: |
-          KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt | tr -d '\r')
-          curl -L -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-          chmod +x ./kubectl
-          sudo mv ./kubectl /usr/local/bin/kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
 
       - name: Verify kind installation
         run: kind version
