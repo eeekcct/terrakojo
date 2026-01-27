@@ -128,23 +128,27 @@ var _ = Describe("Manager", Ordered, func() {
 	// and deleting the namespace.
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
 		By("cleaning up the curl pod for webhook")
-		cmd = exec.Command("kubectl", "delete", "pod", "curl-webhook", "-n", namespace)
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-webhook", "-n", namespace, "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+
+		By("removing webhook resources")
+		cmd = exec.Command("kubectl", "delete", "-k", "test/e2e/manifests/webhook", "--ignore-not-found=true", "--wait=false")
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
+		cmd = exec.Command("kubectl", "delete", "-k", "config/default", "--ignore-not-found=true", "--wait=false")
 		_, _ = utils.Run(cmd)
 
 		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
+		cmd = exec.Command("kubectl", "delete", "-k", "config/crd", "--ignore-not-found=true", "--wait=false")
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
+		cmd = exec.Command("kubectl", "delete", "ns", namespace, "--ignore-not-found=true", "--wait=false")
 		_, _ = utils.Run(cmd)
 	})
 
