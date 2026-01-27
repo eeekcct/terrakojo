@@ -7,6 +7,7 @@ data:
   server.py: |
     import json
     import re
+    from urllib.parse import urlparse
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class Handler(BaseHTTPRequestHandler):
@@ -19,23 +20,26 @@ data:
             self.wfile.write(data)
 
         def do_GET(self):
-            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/commits/[^/]+$", self.path):
+            path = urlparse(self.path).path
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/commits/[^/]+$", path):
                 self._send(200, {"files": [{"filename": "README.md"}]})
                 return
-            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/pulls/\d+/files$", self.path):
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/pulls/\d+/files$", path):
                 self._send(200, [{"filename": "README.md"}])
                 return
             self._send(404, {"message": "not found"})
 
         def do_POST(self):
-            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs$", self.path):
+            path = urlparse(self.path).path
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs$", path):
                 self._send(201, {"id": 101, "status": "queued"})
                 return
             self._send(404, {"message": "not found"})
 
         def do_PATCH(self):
-            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs/\d+$", self.path):
-                check_run_id = int(self.path.split("/")[-1])
+            path = urlparse(self.path).path
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs/\d+$", path):
+                check_run_id = int(path.split("/")[-1])
                 self._send(200, {"id": check_run_id, "status": "completed"})
                 return
             self._send(404, {"message": "not found"})

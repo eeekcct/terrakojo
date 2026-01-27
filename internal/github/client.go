@@ -109,7 +109,7 @@ func newGitHubClient(httpClient *http.Client) (*github.Client, error) {
 		return github.NewClient(httpClient), nil
 	}
 
-	// github.NewEnterpriseClient lets us target a custom GitHub API base URL
+	// github.NewClient(...).WithEnterpriseURLs lets us target a custom GitHub API base URL
 	// (e.g. GitHub Enterprise or a local mock server).
 	if apiURL == "" {
 		apiURL = "https://api.github.com/"
@@ -121,7 +121,8 @@ func newGitHubClient(httpClient *http.Client) (*github.Client, error) {
 	}
 	uploadURL = ensureTrailingSlash(uploadURL)
 
-	return github.NewEnterpriseClient(apiURL, uploadURL, httpClient)
+	client := github.NewClient(httpClient)
+	return client.WithEnterpriseURLs(apiURL, uploadURL)
 }
 
 func ensureTrailingSlash(value string) string {
