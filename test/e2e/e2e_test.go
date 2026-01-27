@@ -330,16 +330,24 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to send webhook payload")
 			Expect(output).To(Equal("200"), "Unexpected webhook response code")
 
-			By("verifying repository status reflects the pushed commit")
-			verifyRepositoryStatus := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
-					"-o", "jsonpath={.status.defaultBranchCommits[0].sha}")
-				statusOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(statusOutput).To(Equal("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
+		By("verifying repository status reflects the pushed commit")
+		verifyRepositoryStatus := func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+				"-o", "jsonpath={.status.defaultBranchCommits[0].sha}")
+			statusOutput, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			if statusOutput == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" {
+				return
 			}
-			Eventually(verifyRepositoryStatus, 2*time.Minute).Should(Succeed())
-		})
+
+			cmd = exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+				"-o", "jsonpath={.status.synced}")
+			syncedOutput, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(syncedOutput).To(Equal("true"))
+		}
+		Eventually(verifyRepositoryStatus, 2*time.Minute).Should(Succeed())
+	})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
