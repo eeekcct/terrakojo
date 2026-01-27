@@ -2,7 +2,7 @@ namespace: terrakojo-system
 namePrefix: terrakojo-
 
 resources:
-  - ../../../config/webhook
+  - ../../../../config/webhook
 
 images:
   - name: controller
