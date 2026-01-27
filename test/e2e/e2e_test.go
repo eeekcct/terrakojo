@@ -135,19 +135,36 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("kubectl", "delete", "pod", "curl-webhook", "-n", namespace, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
+		By("removing workflow resources")
+		cmd = exec.Command("kubectl", "delete", "workflow", "--all", "-n", namespace, "--ignore-not-found=true", "--wait=false")
+		_, _ = utils.Run(cmd)
+
+		By("removing branch resources")
+		cmd = exec.Command("kubectl", "delete", "branch", "--all", "-n", namespace, "--ignore-not-found=true", "--wait=false")
+		_, _ = utils.Run(cmd)
+
 		By("removing repository resources")
 		cmd = exec.Command("kubectl", "delete", "-f", "test/e2e/manifests/repository.yaml", "--ignore-not-found=true", "--wait=false")
 		_, _ = utils.Run(cmd)
 
-		By("waiting for repository deletion before undeploy")
-		cmd = exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace)
-		if _, err := utils.Run(cmd); err == nil {
-			cmd = exec.Command("kubectl", "wait", "--for=delete", "repository/demo-repo", "-n", namespace, "--timeout=3m")
-			_, _ = utils.Run(cmd)
-		}
-
 		By("removing workflow template")
-		cmd = exec.Command("kubectl", "delete", "workflowtemplate", "demo-workflow", "-n", namespace, "--ignore-not-found=true")
+		cmd = exec.Command("kubectl", "delete", "workflowtemplate", "demo-workflow", "-n", namespace, "--ignore-not-found=true", "--wait=false")
+		_, _ = utils.Run(cmd)
+
+		By("waiting for workflow cleanup before undeploy")
+		cmd = exec.Command("kubectl", "wait", "--for=delete", "workflow", "--all", "-n", namespace, "--timeout=3m")
+		_, _ = utils.Run(cmd)
+
+		By("waiting for branch cleanup before undeploy")
+		cmd = exec.Command("kubectl", "wait", "--for=delete", "branch", "--all", "-n", namespace, "--timeout=3m")
+		_, _ = utils.Run(cmd)
+
+		By("waiting for repository cleanup before undeploy")
+		cmd = exec.Command("kubectl", "wait", "--for=delete", "repository", "demo-repo", "-n", namespace, "--timeout=3m")
+		_, _ = utils.Run(cmd)
+
+		By("waiting for workflow template cleanup before undeploy")
+		cmd = exec.Command("kubectl", "wait", "--for=delete", "workflowtemplate", "demo-workflow", "-n", namespace, "--timeout=3m")
 		_, _ = utils.Run(cmd)
 
 		By("removing webhook resources")
