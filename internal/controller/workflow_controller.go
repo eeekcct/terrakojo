@@ -319,6 +319,11 @@ func (r *WorkflowReconciler) createJobFromTemplate(jobName string, template *ter
 	// Normalize container name to comply with RFC 1123
 	containerName := r.normalizeContainerName(step.Name)
 
+	runAsNonRoot := true
+	runAsUser := int64(1000)
+	allowPrivilegeEscalation := false
+	seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+
 	return batchv1.Job{
 		ObjectMeta: ctrl.ObjectMeta{
 			Name:      jobName,
@@ -327,12 +332,23 @@ func (r *WorkflowReconciler) createJobFromTemplate(jobName string, template *ter
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot:   &runAsNonRoot,
+						RunAsUser:      &runAsUser,
+						SeccompProfile: seccompProfile,
+					},
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
 						{
 							Name:    containerName,
 							Image:   step.Image,
 							Command: step.Command,
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
 						},
 					},
 				},

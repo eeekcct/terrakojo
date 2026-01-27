@@ -23,10 +23,15 @@ jobs:
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
 
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
       - name: Verify kind installation
         run: kind version
 
       - name: Running Test e2e
         run: |
           go mod tidy
-          make test-e2e
+          CERT_MANAGER_INSTALL_SKIP=true make test-e2e
