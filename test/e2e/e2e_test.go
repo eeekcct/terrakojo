@@ -136,7 +136,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("removing repository resources")
-		cmd = exec.Command("kubectl", "delete", "-f", "test/e2e/manifests/repository.yaml", "--ignore-not-found=true")
+		cmd = exec.Command("kubectl", "delete", "-f", "test/e2e/manifests/repository.yaml", "--ignore-not-found=true", "--wait=false")
 		_, _ = utils.Run(cmd)
 
 		By("waiting for repository deletion before undeploy")
