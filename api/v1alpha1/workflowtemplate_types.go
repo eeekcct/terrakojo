@@ -81,6 +81,7 @@ type WorkflowTemplateStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 57",message="metadata.name must be 57 characters or less so derived Workflow names (GenerateName + suffix) remain <= 63"
 
 // WorkflowTemplate is the Schema for the workflowtemplates API
 type WorkflowTemplate struct {

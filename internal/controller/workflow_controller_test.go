@@ -267,7 +267,7 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			job := &batchv1.Job{}
-			err = fakeClient.Get(ctx, client.ObjectKey{Name: "workflow-no-template-job", Namespace: workflow.Namespace}, job)
+			err = fakeClient.Get(ctx, client.ObjectKey{Name: "workflow-no-template", Namespace: workflow.Namespace}, job)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
@@ -472,7 +472,7 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			job := &batchv1.Job{}
-			Expect(fakeClient.Get(ctx, client.ObjectKey{Name: "workflow-create-job-job", Namespace: workflow.Namespace}, job)).To(Succeed())
+			Expect(fakeClient.Get(ctx, client.ObjectKey{Name: "workflow-create-job", Namespace: workflow.Namespace}, job)).To(Succeed())
 			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("plan-step"))
 
 			updated := &terrakojoiov1alpha1.Workflow{}
@@ -520,7 +520,7 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			job := &batchv1.Job{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "workflow-job-exists-job",
+					Name:      "workflow-job-exists",
 					Namespace: workflow.Namespace,
 				},
 				Status: batchv1.JobStatus{
@@ -593,7 +593,7 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			job := &batchv1.Job{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "workflow-delete-job",
+					Name:      "workflow-delete",
 					Namespace: workflow.Namespace,
 				},
 				Status: batchv1.JobStatus{
@@ -849,7 +849,7 @@ var _ = Describe("Workflow Controller", func() {
 					},
 				}
 				job := &batchv1.Job{
-					ObjectMeta: metav1.ObjectMeta{Name: "workflow-delete-error-job", Namespace: workflow.Namespace},
+					ObjectMeta: metav1.ObjectMeta{Name: "workflow-delete-error", Namespace: workflow.Namespace},
 					Status:     batchv1.JobStatus{Active: 1},
 				}
 				client := newWorkflowFakeClient(testScheme, workflow, branch, job)
@@ -957,7 +957,7 @@ var _ = Describe("Workflow Controller", func() {
 					},
 				}
 				job := &batchv1.Job{
-					ObjectMeta: metav1.ObjectMeta{Name: "workflow-update-checkrun-error-job", Namespace: workflow.Namespace},
+					ObjectMeta: metav1.ObjectMeta{Name: "workflow-update-checkrun-error", Namespace: workflow.Namespace},
 					Status:     batchv1.JobStatus{Succeeded: 1},
 				}
 				client := newWorkflowFakeClient(testScheme, workflow, branch, job)
@@ -1004,7 +1004,7 @@ var _ = Describe("Workflow Controller", func() {
 					},
 				}
 				job := &batchv1.Job{
-					ObjectMeta: metav1.ObjectMeta{Name: "workflow-update-status-error-job", Namespace: workflow.Namespace},
+					ObjectMeta: metav1.ObjectMeta{Name: "workflow-update-status-error", Namespace: workflow.Namespace},
 					Status:     batchv1.JobStatus{Succeeded: 1},
 				}
 				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, job)
@@ -1364,7 +1364,7 @@ var _ = Describe("Workflow Controller", func() {
 			testScheme := newWorkflowTestScheme()
 
 			job := &batchv1.Job{
-				ObjectMeta: metav1.ObjectMeta{Name: "workflow-complete-job", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{Name: "workflow-complete", Namespace: "default"},
 				Status:     batchv1.JobStatus{Succeeded: 1},
 			}
 			reconciler := &WorkflowReconciler{Client: newWorkflowFakeClient(testScheme, job), Scheme: testScheme}

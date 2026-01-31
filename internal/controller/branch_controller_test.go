@@ -1491,7 +1491,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
-			err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow", "path")
+			_, err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow", "path")
 			Expect(err).To(HaveOccurred())
 		})
 
