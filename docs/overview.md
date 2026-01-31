@@ -50,7 +50,7 @@
 - Default branch commits live only in `defaultBranchCommits`; non-default branches live only in `branchList`.
 - Repository controller skips deleting default-branch Branches; Branch controller handles cleanup after workflows finish.
 - Conflict handling: Repository status updates use `RetryOnConflict` in both webhook and Branch controller.
-- Sample manifests in `config/samples` for Branch/Workflow are outdated (missing required fields).
+- Sample manifests in `config/samples` include required spec fields; update `owner`, `repository`, `branch`, `sha`, and `template` values for your repo.
 
 ## Useful Entry Points
 - CRDs: `api/v1alpha1/*_types.go`
