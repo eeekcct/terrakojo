@@ -176,15 +176,14 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 	}
 
-	jobName = workflow.Name
-	existingJob, existingJobName, err := r.findWorkflowJob(ctx, &workflow, jobName)
-	if err != nil {
+	var job batchv1.Job
+	err = r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job)
+	if err != nil && client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{}, err
 	}
-	if existingJob != nil {
-		jobName = existingJobName
+	if err == nil {
 		// Job exists, update workflow status based on job status
-		phase, phaseChanged := r.determineWorkflowPhase(&workflow, existingJob)
+		phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
 		status, conclusion := r.checkRunStatus(phase)
 		if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion); err != nil {
 			return ctrl.Result{}, err
@@ -236,7 +235,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Create Job from WorkflowTemplate
-	job := r.createJobFromTemplate(jobName, &template)
+	job = r.createJobFromTemplate(jobName, &template)
 
 	if err := controllerutil.SetControllerReference(&workflow, &job, r.Scheme); err != nil {
 		return ctrl.Result{}, err
@@ -273,14 +272,13 @@ func (r *WorkflowReconciler) handleWorkflowDeletion(ctx context.Context, ghClien
 	}
 
 	completed := false
-	existingJob, _, err := r.findWorkflowJob(ctx, workflow, jobName)
-	if err != nil {
-		return err
-	}
-	if existingJob != nil {
-		if existingJob.Status.Succeeded > 0 || existingJob.Status.Failed > 0 {
+	var job batchv1.Job
+	if err := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job); err == nil {
+		if job.Status.Succeeded > 0 || job.Status.Failed > 0 {
 			completed = true
 		}
+	} else if client.IgnoreNotFound(err) != nil {
+		return err
 	} else {
 		// Job not found, consider it completed
 		completed = true
@@ -304,31 +302,6 @@ func (r *WorkflowReconciler) handleWorkflowDeletion(ctx context.Context, ghClien
 	return nil
 }
 
-func (r *WorkflowReconciler) findWorkflowJob(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, preferredName string) (*batchv1.Job, string, error) {
-	job := &batchv1.Job{}
-	err := r.Get(ctx, client.ObjectKey{Name: preferredName, Namespace: workflow.Namespace}, job)
-	if err == nil {
-		return job, preferredName, nil
-	}
-	if client.IgnoreNotFound(err) != nil {
-		return nil, "", err
-	}
-
-	legacyName := fmt.Sprintf("%s-job", workflow.Name)
-	if legacyName == preferredName {
-		return nil, "", nil
-	}
-
-	err = r.Get(ctx, client.ObjectKey{Name: legacyName, Namespace: workflow.Namespace}, job)
-	if err == nil {
-		return job, legacyName, nil
-	}
-	if client.IgnoreNotFound(err) != nil {
-		return nil, "", err
-	}
-
-	return nil, "", nil
-}
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
