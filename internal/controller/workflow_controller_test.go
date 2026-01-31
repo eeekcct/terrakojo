@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -474,6 +475,8 @@ var _ = Describe("Workflow Controller", func() {
 			job := &batchv1.Job{}
 			Expect(fakeClient.Get(ctx, client.ObjectKey{Name: "workflow-create-job", Namespace: workflow.Namespace}, job)).To(Succeed())
 			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("plan-step"))
+			Expect(job.Spec.BackoffLimit).NotTo(BeNil())
+			Expect(*job.Spec.BackoffLimit).To(Equal(int32(0)))
 
 			updated := &terrakojoiov1alpha1.Workflow{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
@@ -1272,6 +1275,9 @@ var _ = Describe("Workflow Controller", func() {
 			Entry("lowercases and replaces spaces", "Plan Step", "plan-step"),
 			Entry("trims to step when empty", "---", "step"),
 			Entry("keeps alphanumerics", "step1", "step1"),
+			Entry("keeps 63 characters", strings.Repeat("a", 63), strings.Repeat("a", 63)),
+			Entry("truncates over 63 characters", strings.Repeat("a", 70), strings.Repeat("a", 63)),
+			Entry("trims trailing hyphen after truncation", strings.Repeat("a", 62)+"-b", strings.Repeat("a", 62)),
 		)
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {
