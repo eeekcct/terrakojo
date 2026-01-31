@@ -302,7 +302,6 @@ func (r *WorkflowReconciler) handleWorkflowDeletion(ctx context.Context, ghClien
 	return nil
 }
 
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
