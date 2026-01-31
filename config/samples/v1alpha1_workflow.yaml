@@ -6,6 +6,9 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: workflow-sample
 spec:
-  branchRef: "branch-sample"
+  owner: "example"
+  repository: "terrakojo"
+  branch: "feature-auth"
+  sha: "0123456789abcdef0123456789abcdef01234567"
   template: "workflowtemplate-sample"
   path: "infra/main.tf"

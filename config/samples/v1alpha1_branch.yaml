@@ -6,7 +6,8 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: branch-sample
 spec:
-  repositoryRef: "repository-sample"
+  owner: "example"
+  repository: "terrakojo"
   name: "feature-auth"
   prNumber: 123
-  sha: "abc123def456789abcdef0123456789abcdef012"
+  sha: "0123456789abcdef0123456789abcdef01234567"
