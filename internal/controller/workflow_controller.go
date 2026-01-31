@@ -94,7 +94,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	jobName := fmt.Sprintf("%s-job", workflow.Name)
+	jobName := workflow.Name
 	owner := workflow.Spec.Owner
 	repo := workflow.Spec.Repository
 	branchRef := workflow.Spec.Branch
@@ -185,8 +185,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// Job exists, update workflow status based on job status
 		phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
 		status, conclusion := r.checkRunStatus(phase)
-		err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
-		if err != nil {
+		if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion); err != nil {
 			return ctrl.Result{}, err
 		}
 		if phaseChanged {
@@ -319,6 +318,7 @@ func (r *WorkflowReconciler) createJobFromTemplate(jobName string, template *ter
 	// Normalize container name to comply with RFC 1123
 	containerName := r.normalizeContainerName(step.Name)
 
+	backoffLimit := int32(0)
 	runAsNonRoot := true
 	runAsUser := int64(1000)
 	allowPrivilegeEscalation := false
@@ -330,6 +330,7 @@ func (r *WorkflowReconciler) createJobFromTemplate(jobName string, template *ter
 			Namespace: template.Namespace,
 		},
 		Spec: batchv1.JobSpec{
+			BackoffLimit: &backoffLimit,
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					SecurityContext: &corev1.PodSecurityContext{
@@ -360,6 +361,8 @@ func (r *WorkflowReconciler) createJobFromTemplate(jobName string, template *ter
 // normalizeContainerName converts a name to a valid Kubernetes container name
 // RFC 1123 compliance: lowercase alphanumeric characters or '-', start and end with alphanumeric
 func (r *WorkflowReconciler) normalizeContainerName(name string) string {
+	const kubeNameMaxLength = 63
+
 	// Convert to lowercase
 	normalized := strings.ToLower(name)
 
@@ -379,6 +382,15 @@ func (r *WorkflowReconciler) normalizeContainerName(name string) string {
 	// Ensure it ends with alphanumeric
 	if !regexp.MustCompile(`[a-z0-9]$`).MatchString(normalized) {
 		normalized = normalized + "-step"
+	}
+
+	// Ensure it does not exceed Kubernetes name limits
+	if len(normalized) > kubeNameMaxLength {
+		normalized = normalized[:kubeNameMaxLength]
+		normalized = strings.Trim(normalized, "-")
+		if len(normalized) == 0 {
+			normalized = "step"
+		}
 	}
 
 	return normalized

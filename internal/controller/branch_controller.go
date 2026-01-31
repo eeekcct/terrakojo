@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"path"
 	"time"
@@ -234,24 +233,12 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			continue
 		}
 		for _, folder := range folders {
-			// Generate random workflow name
-			randomSuffix, err := generateRandomString(8)
+			createdName, err := r.createWorkflowForBranch(ctx, &branch, templateName, fmt.Sprintf("%s-", templateName), folder)
 			if err != nil {
-				log.Error(err, "Failed to generate random string for workflow name")
-				return ctrl.Result{}, err
-			}
-			wfName := fmt.Sprintf("%s-%s", templateName, randomSuffix)
-
-			if err := r.Get(ctx, client.ObjectKey{Name: wfName, Namespace: branch.Namespace}, &terrakojoiov1alpha1.Workflow{}); err == nil {
-				// Workflow already exists, nothing to do
-				return ctrl.Result{}, nil
-			}
-
-			if err := r.createWorkflowForBranch(ctx, &branch, templateName, wfName, folder); err != nil {
 				log.Error(err, "Failed to create Workflow for Branch")
 				return ctrl.Result{}, err
 			}
-			workflowNames = append(workflowNames, wfName)
+			workflowNames = append(workflowNames, createdName)
 		}
 	}
 
@@ -338,11 +325,11 @@ func (r *BranchReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch, templateName, workflowName, workflowPath string) error {
+func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch, templateName, workflowGenerateName, workflowPath string) (string, error) {
 	workflow := &terrakojoiov1alpha1.Workflow{
 		ObjectMeta: ctrl.ObjectMeta{
-			Name:      workflowName,
-			Namespace: branch.Namespace,
+			GenerateName: workflowGenerateName,
+			Namespace:    branch.Namespace,
 			Labels: map[string]string{
 				"terrakojo.io/owner-uid": string(branch.UID),
 			},
@@ -357,10 +344,14 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 		},
 	}
 	if err := controllerutil.SetControllerReference(branch, workflow, r.Scheme); err != nil {
-		return err
+		return "", err
 	}
 
-	return r.Create(ctx, workflow)
+	if err := r.Create(ctx, workflow); err != nil {
+		return "", err
+	}
+
+	return workflow.Name, nil
 }
 
 func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) error {
@@ -420,19 +411,6 @@ func splitFolderLevel(files []string) []string {
 		folders = append(folders, folder)
 	}
 	return folders
-}
-
-// generateRandomString generates a random string of specified length
-func generateRandomString(length int) (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, length)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	for i := range b {
-		b[i] = charset[b[i]%byte(len(charset))]
-	}
-	return string(b), nil
 }
 
 // listWorkflowsForBranch returns workflows owned by the branch using the UID field index.

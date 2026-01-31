@@ -18,6 +18,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: Workflow is the Schema for the workflows API
+        x-kubernetes-validations:
+        - message: metadata.name must be 63 characters or less so derived Job names remain <= 63
+          rule: size(self.metadata.name) <= 63
         properties:
           apiVersion:
             description: |-
