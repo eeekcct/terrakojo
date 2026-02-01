@@ -58,7 +58,11 @@ data:
                     self._send(200, {"name": branch, "commit": {"sha": sha}})
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/pulls$", path):
-                prs = [{"number": number, "state": "open", "head": {"ref": ref}} for ref, number in OPEN_PRS.items()]
+                prs = []
+                for ref, info in OPEN_PRS.items():
+                    number = info.get("number")
+                    sha = info.get("sha") or BRANCHES.get(ref)
+                    prs.append({"number": number, "state": "open", "head": {"ref": ref, "sha": sha}})
                 self._send(200, prs)
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/compare/.+\\.\\.\\..+$", path):
@@ -84,7 +88,16 @@ data:
                     BRANCHES = branches
                 open_prs = payload.get("open_prs")
                 if isinstance(open_prs, dict):
-                    OPEN_PRS = {ref: int(num) for ref, num in open_prs.items()}
+                    updated = {}
+                    for ref, value in open_prs.items():
+                        if isinstance(value, dict):
+                            number = int(value.get("number", 0))
+                            sha = value.get("sha")
+                        else:
+                            number = int(value)
+                            sha = None
+                        updated[ref] = {"number": number, "sha": sha}
+                    OPEN_PRS = updated
                 self._send(200, {"branches": BRANCHES, "open_prs": OPEN_PRS})
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs$", path):

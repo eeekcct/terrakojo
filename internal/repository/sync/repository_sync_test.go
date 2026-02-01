@@ -151,6 +151,36 @@ func TestFetchBranchHeadsFromGitHub(t *testing.T) {
 	require.Equal(t, 12, byRef["feature/new"].PRNumber)
 }
 
+func TestFetchBranchHeadsFromGitHubIncludesForkPR(t *testing.T) {
+	repo := newTestRepository("repo-fork-pr", types.UID("repo-fork-pr-uid"))
+
+	ghClient := &fakeGitHubClient{
+		ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
+			return []*ghapi.Branch{
+				{Name: ghapi.Ptr("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr("sha-main")}},
+			}, nil
+		},
+		ListOpenPullRequestsFunc: func(owner, repoName string) ([]*ghapi.PullRequest, error) {
+			return []*ghapi.PullRequest{
+				{
+					Number: ghapi.Ptr(7),
+					Head: &ghapi.PullRequestBranch{
+						Ref: ghapi.Ptr("feature/fork"),
+						SHA: ghapi.Ptr("sha-fork"),
+					},
+				},
+			}, nil
+		},
+	}
+
+	updated, err := FetchBranchHeadsFromGitHub(repo, ghClient)
+	require.NoError(t, err)
+	require.Len(t, updated, 1)
+	require.Equal(t, "feature/fork", updated[0].Ref)
+	require.Equal(t, "sha-fork", updated[0].SHA)
+	require.Equal(t, 7, updated[0].PRNumber)
+}
+
 func newTestRepository(name string, uid types.UID) *terrakojoiov1alpha1.Repository {
 	return &terrakojoiov1alpha1.Repository{
 		ObjectMeta: metav1.ObjectMeta{

@@ -71,7 +71,11 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 		return nil, fmt.Errorf("failed to list pull requests: %w", err)
 	}
 
-	prByRef := map[string]int{}
+	type prHead struct {
+		number int
+		sha    string
+	}
+	prByRef := map[string]prHead{}
 	for _, pr := range prs {
 		if pr == nil || pr.Head == nil || pr.Head.Ref == nil || pr.Number == nil {
 			continue
@@ -80,22 +84,42 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 		if _, exists := prByRef[ref]; exists {
 			continue
 		}
-		prByRef[ref] = *pr.Number
+		sha := ""
+		if pr.Head.SHA != nil {
+			sha = *pr.Head.SHA
+		}
+		prByRef[ref] = prHead{number: *pr.Number, sha: sha}
 	}
 
-	newRefs := make([]string, 0, len(branchHeads))
+	refSet := make(map[string]struct{}, len(branchHeads)+len(prByRef))
 	for ref := range branchHeads {
+		refSet[ref] = struct{}{}
+	}
+	for ref := range prByRef {
+		refSet[ref] = struct{}{}
+	}
+
+	newRefs := make([]string, 0, len(refSet))
+	for ref := range refSet {
 		newRefs = append(newRefs, ref)
 	}
 	sort.Strings(newRefs)
 	updated := make([]terrakojoiov1alpha1.BranchInfo, 0, len(newRefs))
 	for _, ref := range newRefs {
+		sha := branchHeads[ref]
+		prInfo, hasPR := prByRef[ref]
+		if sha == "" && hasPR {
+			sha = prInfo.sha
+		}
+		if sha == "" {
+			continue
+		}
 		entry := terrakojoiov1alpha1.BranchInfo{
 			Ref: ref,
-			SHA: branchHeads[ref],
+			SHA: sha,
 		}
-		if prNumber, ok := prByRef[ref]; ok {
-			entry.PRNumber = prNumber
+		if hasPR {
+			entry.PRNumber = prInfo.number
 		}
 		updated = append(updated, entry)
 	}
