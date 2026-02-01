@@ -24,6 +24,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -136,9 +137,30 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	var labeledBranchList terrakojoiov1alpha1.BranchList
+	if err := r.List(
+		ctx,
+		&labeledBranchList,
+		client.InNamespace(req.Namespace),
+		client.MatchingLabels{"terrakojo.io/repo-uid": string(repo.UID)},
+	); err != nil {
+		log.Error(err, "Failed to list Branch resources by label")
+		return ctrl.Result{}, err
+	}
+
+	branchesByUID := make(map[types.UID]terrakojoiov1alpha1.Branch)
+	for _, branch := range branchList.Items {
+		branchesByUID[branch.UID] = branch
+	}
+	for _, branch := range labeledBranchList.Items {
+		if _, exists := branchesByUID[branch.UID]; !exists {
+			branchesByUID[branch.UID] = branch
+		}
+	}
+
 	// Build a map for quick lookup
 	existingBranches := make(map[string][]terrakojoiov1alpha1.Branch)
-	for _, branch := range branchList.Items {
+	for _, branch := range branchesByUID {
 		existingBranches[branch.Spec.Name] = append(existingBranches[branch.Spec.Name], branch)
 	}
 
