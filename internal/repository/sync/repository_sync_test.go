@@ -101,7 +101,7 @@ func TestCollectDefaultBranchCommitsUsesCompare(t *testing.T) {
 	require.Equal(t, []string{"sha-1", "sha-2"}, shas)
 }
 
-func TestCollectDefaultBranchCommitsFallsBackToHead(t *testing.T) {
+func TestCollectDefaultBranchCommitsReturnsErrorOnCompareFailure(t *testing.T) {
 	repo := newTestRepository("repo-compare-error", types.UID("repo-compare-error-uid"))
 	repo.Status.LastDefaultBranchHeadSHA = "base"
 	ghClient := &fakeGitHubClient{
@@ -111,8 +111,8 @@ func TestCollectDefaultBranchCommitsFallsBackToHead(t *testing.T) {
 	}
 
 	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
-	require.NoError(t, err)
-	require.Equal(t, []string{"head"}, shas)
+	require.Error(t, err)
+	require.Nil(t, shas)
 }
 
 func TestFetchBranchHeadsFromGitHub(t *testing.T) {

@@ -32,7 +32,7 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 
 	commits, err := ghClient.CompareCommits(repo.Spec.Owner, repo.Spec.Name, repo.Status.LastDefaultBranchHeadSHA, headSHA)
 	if err != nil {
-		return []string{headSHA}, nil
+		return nil, fmt.Errorf("failed to compare commits for default branch: %w", err)
 	}
 
 	shas := make([]string, 0, len(commits))
