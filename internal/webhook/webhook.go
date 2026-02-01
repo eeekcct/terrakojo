@@ -23,7 +23,6 @@ type Handler struct {
 	client        client.Client
 }
 
-const prActionClosed = "closed"
 const syncRequestAnnotation = "terrakojo.io/sync-requested-at"
 
 // NewHandler creates a new platform-agnostic webhook handler

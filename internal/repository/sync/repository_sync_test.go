@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"testing"
 
-	gh "github.com/eeekcct/terrakojo/internal/github"
 	ghapi "github.com/google/go-github/v79/github"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
+	gh "github.com/eeekcct/terrakojo/internal/github"
 )
 
 type fakeGitHubClient struct {
@@ -90,8 +90,8 @@ func TestCollectDefaultBranchCommitsUsesCompare(t *testing.T) {
 			require.Equal(t, "base", base)
 			require.Equal(t, "head", head)
 			return []*ghapi.RepositoryCommit{
-				{SHA: ghapi.String("sha-1")},
-				{SHA: ghapi.String("sha-2")},
+				{SHA: ghapi.Ptr("sha-1")},
+				{SHA: ghapi.Ptr("sha-2")},
 			}, nil
 		},
 	}
@@ -121,16 +121,16 @@ func TestFetchBranchHeadsFromGitHub(t *testing.T) {
 	ghClient := &fakeGitHubClient{
 		ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
 			return []*ghapi.Branch{
-				{Name: ghapi.String("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String("sha-main")}},
-				{Name: ghapi.String("feature/old"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String("sha-old")}},
-				{Name: ghapi.String("feature/new"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String("sha-new")}},
+				{Name: ghapi.Ptr("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr("sha-main")}},
+				{Name: ghapi.Ptr("feature/old"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr("sha-old")}},
+				{Name: ghapi.Ptr("feature/new"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr("sha-new")}},
 			}, nil
 		},
 		ListOpenPullRequestsFunc: func(owner, repoName string) ([]*ghapi.PullRequest, error) {
 			return []*ghapi.PullRequest{
 				{
-					Number: ghapi.Int(12),
-					Head:   &ghapi.PullRequestBranch{Ref: ghapi.String("feature/new")},
+					Number: ghapi.Ptr(12),
+					Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr("feature/new")},
 				},
 			}, nil
 		},

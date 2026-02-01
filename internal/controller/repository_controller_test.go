@@ -133,9 +133,9 @@ var _ = Describe("Repository Reconciler", func() {
 				return &fakeGitHubClient{
 					GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
 						return &ghapi.Branch{
-							Name: ghapi.String(branchName),
+							Name: ghapi.Ptr(branchName),
 							Commit: &ghapi.RepositoryCommit{
-								SHA: ghapi.String(sha),
+								SHA: ghapi.Ptr(sha),
 							},
 						}, nil
 					},
@@ -177,19 +177,19 @@ var _ = Describe("Repository Reconciler", func() {
 			ghManager.GetClientForRepositoryFunc = func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
 				return &fakeGitHubClient{
 					GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
-						return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+						return &ghapi.Branch{Name: ghapi.Ptr(branchName)}, nil
 					},
 					ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
 						return []*ghapi.Branch{
-							{Name: ghapi.String("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String("sha-main")}},
-							{Name: ghapi.String(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String(sha)}},
+							{Name: ghapi.Ptr("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr("sha-main")}},
+							{Name: ghapi.Ptr(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(sha)}},
 						}, nil
 					},
 					ListOpenPullRequestsFunc: func(owner, repoName string) ([]*ghapi.PullRequest, error) {
 						return []*ghapi.PullRequest{
 							{
-								Number: ghapi.Int(12),
-								Head:   &ghapi.PullRequestBranch{Ref: ghapi.String(ref)},
+								Number: ghapi.Ptr(12),
+								Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref)},
 							},
 						}, nil
 					},
@@ -228,11 +228,11 @@ var _ = Describe("Repository Reconciler", func() {
 			ghManager.GetClientForRepositoryFunc = func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
 				return &fakeGitHubClient{
 					GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
-						return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+						return &ghapi.Branch{Name: ghapi.Ptr(branchName)}, nil
 					},
 					ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
 						return []*ghapi.Branch{
-							{Name: ghapi.String("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String("sha-main")}},
+							{Name: ghapi.Ptr("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr("sha-main")}},
 						}, nil
 					},
 				}, nil
@@ -340,9 +340,9 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 					return &fakeGitHubClient{
 						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
 							return &ghapi.Branch{
-								Name: ghapi.String(branchName),
+								Name: ghapi.Ptr(branchName),
 								Commit: &ghapi.RepositoryCommit{
-									SHA: ghapi.String("0123456789abcdef0123456789abcdef01234567"),
+									SHA: ghapi.Ptr("0123456789abcdef0123456789abcdef01234567"),
 								},
 							}, nil
 						},
@@ -369,11 +369,11 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
 					return &fakeGitHubClient{
 						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
-							return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+							return &ghapi.Branch{Name: ghapi.Ptr(branchName)}, nil
 						},
 						ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
 							return []*ghapi.Branch{
-								{Name: ghapi.String("feature/error"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String(newSHA)}},
+								{Name: ghapi.Ptr("feature/error"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(newSHA)}},
 							}, nil
 						},
 					}, nil
@@ -409,7 +409,7 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
 					return &fakeGitHubClient{
 						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
-							return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+							return &ghapi.Branch{Name: ghapi.Ptr(branchName)}, nil
 						},
 						ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
 							return []*ghapi.Branch{}, nil
@@ -437,18 +437,18 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
 					return &fakeGitHubClient{
 						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
-							return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+							return &ghapi.Branch{Name: ghapi.Ptr(branchName)}, nil
 						},
 						ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
 							return []*ghapi.Branch{
-								{Name: ghapi.String(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String(sha)}},
+								{Name: ghapi.Ptr(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(sha)}},
 							}, nil
 						},
 						ListOpenPullRequestsFunc: func(owner, repoName string) ([]*ghapi.PullRequest, error) {
 							return []*ghapi.PullRequest{
 								{
-									Number: ghapi.Int(99),
-									Head:   &ghapi.PullRequestBranch{Ref: ghapi.String(ref)},
+									Number: ghapi.Ptr(99),
+									Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref)},
 								},
 							}, nil
 						},

@@ -35,7 +35,7 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 		return []string{headSHA}, nil
 	}
 
-	var shas []string
+	shas := make([]string, 0, len(commits))
 	for _, commit := range commits {
 		if commit == nil || commit.SHA == nil {
 			continue
@@ -83,7 +83,7 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 		prByRef[ref] = *pr.Number
 	}
 
-	var newRefs []string
+	newRefs := make([]string, 0, len(branchHeads))
 	for ref := range branchHeads {
 		newRefs = append(newRefs, ref)
 	}

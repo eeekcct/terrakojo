@@ -45,6 +45,8 @@ import (
 
 var nameCounter uint64
 
+const defaultBranchName = "main"
+
 func uniqueName(base string) string {
 	return fmt.Sprintf("%s-%d-%d", base, GinkgoParallelProcess(), atomic.AddUint64(&nameCounter, 1))
 }
@@ -59,7 +61,7 @@ func createTestNamespace(ctx context.Context) string {
 	return ns.Name
 }
 
-func newBranchRepository(namespace, owner, repoName, defaultBranch string) *terrakojoiov1alpha1.Repository {
+func newBranchRepository(namespace, owner, repoName string) *terrakojoiov1alpha1.Repository {
 	return &terrakojoiov1alpha1.Repository{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      repoName,
@@ -69,7 +71,7 @@ func newBranchRepository(namespace, owner, repoName, defaultBranch string) *terr
 			Owner:         owner,
 			Name:          repoName,
 			Type:          "github",
-			DefaultBranch: defaultBranch,
+			DefaultBranch: defaultBranchName,
 			GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
 				Name: "dummy",
 			},
@@ -78,7 +80,7 @@ func newBranchRepository(namespace, owner, repoName, defaultBranch string) *terr
 }
 
 func repoForBranch(branch *terrakojoiov1alpha1.Branch) *terrakojoiov1alpha1.Repository {
-	return newBranchRepository(branch.Namespace, branch.Spec.Owner, branch.Spec.Repository, "main")
+	return newBranchRepository(branch.Namespace, branch.Spec.Owner, branch.Spec.Repository)
 }
 
 func newBranchTestScheme() *runtime.Scheme {
@@ -243,7 +245,7 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-finalizer")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repo := newBranchRepository(namespace, owner, repoName, "main")
+			repo := newBranchRepository(namespace, owner, repoName)
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -278,7 +280,7 @@ var _ = Describe("Branch Controller", func() {
 			workflowName := uniqueName("workflow-remains")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repo := newBranchRepository(namespace, owner, repoName, "main")
+			repo := newBranchRepository(namespace, owner, repoName)
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -339,7 +341,7 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-delete-clean")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repo := newBranchRepository(namespace, owner, repoName, "main")
+			repo := newBranchRepository(namespace, owner, repoName)
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -385,7 +387,7 @@ var _ = Describe("Branch Controller", func() {
 					Owner:         owner,
 					Name:          repoName,
 					Type:          "github",
-					DefaultBranch: "main",
+					DefaultBranch: defaultBranchName,
 					GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
 						Name: "dummy",
 					},
@@ -463,7 +465,7 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-workflow")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repo := newBranchRepository(namespace, owner, repoName, "main")
+			repo := newBranchRepository(namespace, owner, repoName)
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			tfTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -576,7 +578,7 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-recreate-workflow")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repo := newBranchRepository(namespace, owner, repoName, "main")
+			repo := newBranchRepository(namespace, owner, repoName)
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -666,7 +668,7 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-pr")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repo := newBranchRepository(namespace, owner, repoName, "main")
+			repo := newBranchRepository(namespace, owner, repoName)
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -709,7 +711,7 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-no-workflow")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repo := newBranchRepository(namespace, owner, repoName, "main")
+			repo := newBranchRepository(namespace, owner, repoName)
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -975,7 +977,7 @@ var _ = Describe("Branch Controller", func() {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.UID = types.UID("branch-completed-delete")
-				branch.Spec.Name = "main"
+				branch.Spec.Name = defaultBranchName
 				repo := repoForBranch(branch)
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
@@ -1058,7 +1060,7 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when deleting branch with no changed files", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				branch.Spec.Name = "main"
+				branch.Spec.Name = defaultBranchName
 				repo := repoForBranch(branch)
 				baseClient := newBranchFakeClient(testScheme, branch, repo)
 				ghManager := &fakeGitHubClientManager{
@@ -1080,7 +1082,7 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when deleting branch with no matching templates", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				branch.Spec.Name = "main"
+				branch.Spec.Name = defaultBranchName
 				repo := repoForBranch(branch)
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
