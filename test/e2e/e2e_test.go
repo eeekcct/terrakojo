@@ -475,6 +475,16 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to send pull request merged webhook")
 			Expect(output).To(Equal("200"), "Unexpected webhook response code")
 
+			By("verifying repository status reflects the merge commit")
+			verifyMergeCommitHead := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
+					"-o", "jsonpath={.status.lastDefaultBranchHeadSha}")
+				statusOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(statusOutput).To(Equal(mergeSHA))
+			}
+			Eventually(verifyMergeCommitHead, 2*time.Minute).Should(Succeed())
+
 			By("verifying the PR branch is removed")
 			verifyPRBranchRemoved := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "branch", "-n", namespace,
@@ -485,16 +495,6 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(lines).To(BeEmpty())
 			}
 			Eventually(verifyPRBranchRemoved, 2*time.Minute).Should(Succeed())
-
-			By("verifying repository status reflects the merge commit")
-			verifyMergeCommitHead := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "repository", "demo-repo", "-n", namespace,
-					"-o", "jsonpath={.status.lastDefaultBranchHeadSha}")
-				statusOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(statusOutput).To(Equal(mergeSHA))
-			}
-			Eventually(verifyMergeCommitHead, 2*time.Minute).Should(Succeed())
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
