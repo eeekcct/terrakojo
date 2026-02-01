@@ -6,7 +6,7 @@ import (
 
 	ghapi "github.com/google/go-github/v79/github"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
@@ -153,7 +153,7 @@ func TestFetchBranchHeadsFromGitHub(t *testing.T) {
 
 func newTestRepository(name string, uid types.UID) *terrakojoiov1alpha1.Repository {
 	return &terrakojoiov1alpha1.Repository{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "default",
 			UID:       uid,
