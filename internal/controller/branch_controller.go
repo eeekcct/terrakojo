@@ -466,6 +466,20 @@ func (r *BranchReconciler) markBranchSHA(ctx context.Context, branch *terrakojoi
 }
 
 func (r *BranchReconciler) getRepositoryForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (*terrakojoiov1alpha1.Repository, error) {
+	for _, ref := range branch.GetOwnerReferences() {
+		if ref.Kind != "Repository" || ref.Name == "" {
+			continue
+		}
+		var repo terrakojoiov1alpha1.Repository
+		if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: branch.Namespace}, &repo); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				return nil, err
+			}
+			break
+		}
+		return &repo, nil
+	}
+
 	var repo terrakojoiov1alpha1.Repository
 	if err := r.Get(ctx, client.ObjectKey{Name: branch.Spec.Repository, Namespace: branch.Namespace}, &repo); err != nil {
 		return nil, client.IgnoreNotFound(err)
