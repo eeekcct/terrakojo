@@ -478,7 +478,7 @@ var _ = Describe("Manager", Ordered, func() {
 			By("verifying the PR branch is removed")
 			verifyPRBranchRemoved := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "branch", "-n", namespace,
-					"-o", "jsonpath={range .items[*]}{.spec.name}{\"\\n\"}{end}")
+					"-o", "go-template={{range .items}}{{if not .metadata.deletionTimestamp}}{{.spec.name}}{{\"\\n\"}}{{end}}{{end}}")
 				listOutput, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				lines := utils.GetNonEmptyLines(listOutput)
