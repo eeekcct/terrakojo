@@ -83,6 +83,25 @@ func repoForBranch(branch *terrakojoiov1alpha1.Branch) *terrakojoiov1alpha1.Repo
 	return newBranchRepository(branch.Namespace, branch.Spec.Owner, branch.Spec.Repository)
 }
 
+func repositoryOwnerReference(repoName string, repoUID types.UID) metav1.OwnerReference {
+	controller := true
+	blockOwnerDeletion := true
+	return metav1.OwnerReference{
+		APIVersion:         terrakojoiov1alpha1.GroupVersion.String(),
+		Kind:               "Repository",
+		Name:               repoName,
+		UID:                repoUID,
+		Controller:         &controller,
+		BlockOwnerDeletion: &blockOwnerDeletion,
+	}
+}
+
+func attachRepositoryOwnerReference(branch *terrakojoiov1alpha1.Branch, repo *terrakojoiov1alpha1.Repository) {
+	branch.OwnerReferences = []metav1.OwnerReference{
+		repositoryOwnerReference(repo.Name, repo.UID),
+	}
+}
+
 func newBranchTestScheme() *runtime.Scheme {
 	testScheme := runtime.NewScheme()
 	Expect(terrakojoiov1alpha1.AddToScheme(testScheme)).To(Succeed())
@@ -106,6 +125,9 @@ func newErrorTestBranch() *terrakojoiov1alpha1.Branch {
 			Name:       "branch-error-test",
 			Namespace:  "default",
 			Finalizers: []string{branchFinalizer},
+			OwnerReferences: []metav1.OwnerReference{
+				repositoryOwnerReference("repo", ""),
+			},
 		},
 		Spec: terrakojoiov1alpha1.BranchSpec{
 			Repository: "repo",
@@ -262,6 +284,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			key := client.ObjectKeyFromObject(branch)
@@ -300,6 +323,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			createdBranch := &terrakojoiov1alpha1.Branch{}
@@ -361,6 +385,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "abcdef0123456789abcdef0123456789abcdef01",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, branch)).To(Succeed())
 
@@ -413,6 +438,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			createdBranch := &terrakojoiov1alpha1.Branch{}
@@ -521,6 +547,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			Eventually(func(g Gomega) {
@@ -616,6 +643,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234568",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			Eventually(getChangedFilesCalled.Load).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
@@ -683,6 +711,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			Eventually(prCalled.Load).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
@@ -746,6 +775,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			Eventually(func(g Gomega) {
