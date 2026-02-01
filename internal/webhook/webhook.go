@@ -143,6 +143,13 @@ func (h *Handler) requestRepositorySync(webhookInfo ghpkg.WebhookInfo) error {
 	}
 
 	targetRepository := &repositories.Items[0]
+	if webhookInfo.EventType == ghpkg.EventTypePR &&
+		webhookInfo.Action == "closed" &&
+		webhookInfo.PRNumber != nil {
+		if err := h.deleteBranchesForPR(targetRepository, webhookInfo.BranchName, *webhookInfo.PRNumber); err != nil {
+			log.Printf("Failed to delete Branch resources for PR: %v", err)
+		}
+	}
 	key := client.ObjectKey{Name: targetRepository.Name, Namespace: targetRepository.Namespace}
 
 	// Use optimistic retry to avoid clobbering concurrent controller updates.
@@ -165,5 +172,27 @@ func (h *Handler) requestRepositorySync(webhookInfo ghpkg.WebhookInfo) error {
 	}
 
 	log.Printf("Requested Repository sync for %s (spec.owner=%s spec.name=%s)", targetRepository.Name, webhookInfo.Owner, webhookInfo.RepositoryName)
+	return nil
+}
+
+func (h *Handler) deleteBranchesForPR(repo *v1alpha1.Repository, branchName string, prNumber int) error {
+	branches := &v1alpha1.BranchList{}
+	if err := h.client.List(context.Background(), branches, &client.ListOptions{
+		Namespace: repo.Namespace,
+		LabelSelector: labels.SelectorFromSet(map[string]string{
+			"terrakojo.io/repo-uid": string(repo.UID),
+		}),
+	}); err != nil {
+		return err
+	}
+
+	for _, branch := range branches.Items {
+		if branch.Spec.Name != branchName || branch.Spec.PRNumber != prNumber {
+			continue
+		}
+		if err := h.client.Delete(context.Background(), &branch); err != nil && client.IgnoreNotFound(err) != nil {
+			return err
+		}
+	}
 	return nil
 }
