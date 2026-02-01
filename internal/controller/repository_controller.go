@@ -444,7 +444,7 @@ func hashRef(ref string) string {
 func indexByOwnerRepositoryUID(obj client.Object) []string {
 	branch := obj.(*terrakojoiov1alpha1.Branch)
 	for _, ref := range branch.GetOwnerReferences() {
-		if ref.Kind == "Repository" {
+		if ref.Controller != nil && *ref.Controller && ref.Kind == "Repository" {
 			return []string{string(ref.UID)}
 		}
 	}
