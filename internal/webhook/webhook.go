@@ -5,8 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
-
-	"slices"
+	"time"
 
 	"k8s.io/client-go/util/retry"
 
@@ -25,6 +24,7 @@ type Handler struct {
 }
 
 const prActionClosed = "closed"
+const syncRequestAnnotation = "terrakojo.io/sync-requested-at"
 
 // NewHandler creates a new platform-agnostic webhook handler
 func NewHandler(cfg *config.Config, kubeClient client.Client) (*Handler, error) {
@@ -107,76 +107,17 @@ func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert WebhookInfo to BranchInfo for repository updates
-	branchInfo := h.convertWebhookInfoToBranchInfo(webhookInfo)
-	if branchInfo == nil {
+	if webhookInfo.EventType == ghpkg.EventTypePing {
 		return
 	}
 
-	if err := h.updateRepositoryBranchList(*webhookInfo, *branchInfo); err != nil {
-		log.Printf("Error updating repository: %v", err)
+	if err := h.requestRepositorySync(*webhookInfo); err != nil {
+		log.Printf("Error requesting repository sync: %v", err)
 	}
 }
 
-// convertWebhookInfoToBranchInfo converts generic webhook info to BranchInfo
-// Returns nil for events that don't require repository updates (like ping events)
-func (h *Handler) convertWebhookInfoToBranchInfo(webhookInfo *ghpkg.WebhookInfo) *v1alpha1.BranchInfo {
-	// Only process push and pull request events
-	switch webhookInfo.EventType {
-	case ghpkg.EventTypePush:
-		branchInfo := &v1alpha1.BranchInfo{
-			Ref: webhookInfo.BranchName,
-			SHA: webhookInfo.CommitSHA,
-		}
-		return branchInfo
-
-	case ghpkg.EventTypePR:
-		// If merged, treat as default-branch commit using merge_commit_sha and base ref
-		if webhookInfo.Merged {
-			return &v1alpha1.BranchInfo{
-				Ref: webhookInfo.BaseBranchName,
-				SHA: webhookInfo.MergeCommitSHA,
-			}
-		}
-
-		// Otherwise track PR head
-		branchInfo := &v1alpha1.BranchInfo{
-			Ref: webhookInfo.BranchName,
-			SHA: webhookInfo.CommitSHA,
-		}
-		if webhookInfo.PRNumber != nil {
-			branchInfo.PRNumber = *webhookInfo.PRNumber
-		}
-		return branchInfo
-
-	case ghpkg.EventTypePing:
-		return nil
-
-	default:
-		log.Printf("Unhandled webhook event type: %s", webhookInfo.EventType)
-		return nil
-	}
-}
-
-// updateBranchListWithLatestSHA updates the BranchList by replacing the entry for the given ref with the new SHA.
-// Returns the updated BranchList and true if the BranchList was modified.
-func updateBranchListWithLatestSHA(branchList []v1alpha1.BranchInfo, branchInfo v1alpha1.BranchInfo) ([]v1alpha1.BranchInfo, bool) {
-	before := len(branchList)
-	oldSHA := ""
-	branchList = slices.DeleteFunc(branchList, func(b v1alpha1.BranchInfo) bool {
-		if b.Ref == branchInfo.Ref {
-			oldSHA = b.SHA
-			return true
-		}
-		return false
-	})
-	branchList = append(branchList, branchInfo)
-	changed := len(branchList) != before || oldSHA != branchInfo.SHA
-	return branchList, changed
-}
-
-// updateRepositoryBranchList updates the Repository's BranchList with the new branch information
-func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, branchInfo v1alpha1.BranchInfo) error {
+// requestRepositorySync updates a Repository annotation to trigger a reconcile.
+func (h *Handler) requestRepositorySync(webhookInfo ghpkg.WebhookInfo) error {
 	// Use label selector to efficiently find the Repository
 	repositories := &v1alpha1.RepositoryList{}
 	labelSelector := labels.SelectorFromSet(map[string]string{
@@ -212,77 +153,18 @@ func (h *Handler) updateRepositoryBranchList(webhookInfo ghpkg.WebhookInfo, bran
 			return err
 		}
 
-		changed := false
-
-		// Default branch (push/merge): enqueue commit to defaultBranchCommits.
-		if (webhookInfo.EventType == ghpkg.EventTypePush ||
-			(webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == prActionClosed && webhookInfo.Merged)) &&
-			branchInfo.Ref == repo.Spec.DefaultBranch {
-			before := len(repo.Status.DefaultBranchCommits)
-			exists := false
-			for _, c := range repo.Status.DefaultBranchCommits {
-				if c.SHA == branchInfo.SHA {
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				repo.Status.DefaultBranchCommits = append(repo.Status.DefaultBranchCommits, branchInfo)
-			}
-			if len(repo.Status.DefaultBranchCommits) != before {
-				changed = true
-			}
+		if repo.Annotations == nil {
+			repo.Annotations = map[string]string{}
 		}
-
-		// Push to non-default branch: keep latest SHA per ref in branchList.
-		if webhookInfo.EventType == ghpkg.EventTypePush && branchInfo.Ref != repo.Spec.DefaultBranch {
-			var branchChanged bool
-			repo.Status.BranchList, branchChanged = updateBranchListWithLatestSHA(repo.Status.BranchList, branchInfo)
-			if branchChanged {
-				changed = true
-			}
-		}
-
-		// PR open/synchronize: replace latest SHA for non-default branch.
-		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action != prActionClosed {
-			// Only update BranchList for non-default branches
-			if branchInfo.Ref != repo.Spec.DefaultBranch {
-				var branchChanged bool
-				repo.Status.BranchList, branchChanged = updateBranchListWithLatestSHA(repo.Status.BranchList, branchInfo)
-				if branchChanged {
-					changed = true
-				}
-			}
-		}
-
-		// PR closed (merged/non-merged): remove PR head branch entry from list; leave defaultBranchCommits untouched.
-		if webhookInfo.EventType == ghpkg.EventTypePR && webhookInfo.Action == prActionClosed {
-			prHeadRef := webhookInfo.BranchName
-			// Do not attempt to remove the default branch from BranchList
-			if prHeadRef != repo.Spec.DefaultBranch {
-				before := len(repo.Status.BranchList)
-				repo.Status.BranchList = slices.DeleteFunc(repo.Status.BranchList, func(b v1alpha1.BranchInfo) bool {
-					return b.Ref == prHeadRef
-				})
-				if len(repo.Status.BranchList) != before {
-					changed = true
-				}
-			}
-		}
-
-		if !changed {
-			return nil
-		}
-
-		repo.Status.Synced = true
-		return h.client.Status().Update(context.Background(), &repo)
+		repo.Annotations[syncRequestAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
+		return h.client.Update(context.Background(), &repo)
 	})
 
 	if err != nil {
-		log.Printf("Failed to update Repository %s status: %v", targetRepository.Name, err)
+		log.Printf("Failed to update Repository %s: %v", targetRepository.Name, err)
 		return err
 	}
 
-	log.Printf("Updated Repository %s (spec.owner=%s spec.name=%s) with branch info: %+v", targetRepository.Name, webhookInfo.Owner, webhookInfo.RepositoryName, branchInfo)
+	log.Printf("Requested Repository sync for %s (spec.owner=%s spec.name=%s)", targetRepository.Name, webhookInfo.Owner, webhookInfo.RepositoryName)
 	return nil
 }

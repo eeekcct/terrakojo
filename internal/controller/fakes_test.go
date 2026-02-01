@@ -48,6 +48,9 @@ type fakeGitHubClient struct {
 	GetChangedFilesFunc          func(owner, repo string, prNumber int) ([]string, error)
 	GetChangedFilesForCommitFunc func(owner, repo, sha string) ([]string, error)
 	GetBranchFunc                func(owner, repo, branchName string) (*ghapi.Branch, error)
+	ListBranchesFunc             func(owner, repo string) ([]*ghapi.Branch, error)
+	ListOpenPullRequestsFunc     func(owner, repo string) ([]*ghapi.PullRequest, error)
+	CompareCommitsFunc           func(owner, repo, base, head string) ([]*ghapi.RepositoryCommit, error)
 	CreateCheckRunFunc           func(owner, repo, sha, name string) (*ghapi.CheckRun, error)
 	UpdateCheckRunFunc           func(owner, repo string, checkRunID int64, name, status, conclusion string) error
 }
@@ -73,6 +76,27 @@ func (f *fakeGitHubClient) GetBranch(owner, repo, branchName string) (*ghapi.Bra
 		return f.GetBranchFunc(owner, repo, branchName)
 	}
 	return &ghapi.Branch{}, nil
+}
+
+func (f *fakeGitHubClient) ListBranches(owner, repo string) ([]*ghapi.Branch, error) {
+	if f.ListBranchesFunc != nil {
+		return f.ListBranchesFunc(owner, repo)
+	}
+	return []*ghapi.Branch{}, nil
+}
+
+func (f *fakeGitHubClient) ListOpenPullRequests(owner, repo string) ([]*ghapi.PullRequest, error) {
+	if f.ListOpenPullRequestsFunc != nil {
+		return f.ListOpenPullRequestsFunc(owner, repo)
+	}
+	return []*ghapi.PullRequest{}, nil
+}
+
+func (f *fakeGitHubClient) CompareCommits(owner, repo, base, head string) ([]*ghapi.RepositoryCommit, error) {
+	if f.CompareCommitsFunc != nil {
+		return f.CompareCommitsFunc(owner, repo, base, head)
+	}
+	return []*ghapi.RepositoryCommit{}, nil
 }
 
 func (f *fakeGitHubClient) CreateCheckRun(owner, repo, sha, name string) (*ghapi.CheckRun, error) {

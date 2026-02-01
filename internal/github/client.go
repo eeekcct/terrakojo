@@ -34,6 +34,9 @@ type ClientInterface interface {
 	GetChangedFiles(owner, repo string, prNumber int) ([]string, error)
 	GetChangedFilesForCommit(owner, repo, sha string) ([]string, error)
 	GetBranch(owner, repo, branchName string) (*github.Branch, error)
+	ListBranches(owner, repo string) ([]*github.Branch, error)
+	ListOpenPullRequests(owner, repo string) ([]*github.PullRequest, error)
+	CompareCommits(owner, repo, base, head string) ([]*github.RepositoryCommit, error)
 	CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error)
 	UpdateCheckRun(owner, repo string, checkRunID int64, name, status, conclusion string) error
 }
@@ -173,6 +176,53 @@ func (c *Client) GetChangedFilesForCommit(owner, repo, sha string) ([]string, er
 func (c *Client) GetBranch(owner, repo, branchName string) (*github.Branch, error) {
 	branch, _, err := c.client.Repositories.GetBranch(c.ctx, owner, repo, branchName, 3)
 	return branch, err
+}
+
+func (c *Client) ListBranches(owner, repo string) ([]*github.Branch, error) {
+	var allBranches []*github.Branch
+	opts := &github.BranchListOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	for {
+		branches, resp, err := c.client.Repositories.ListBranches(c.ctx, owner, repo, opts)
+		if err != nil {
+			return nil, err
+		}
+		allBranches = append(allBranches, branches...)
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return allBranches, nil
+}
+
+func (c *Client) ListOpenPullRequests(owner, repo string) ([]*github.PullRequest, error) {
+	var allPRs []*github.PullRequest
+	opts := &github.PullRequestListOptions{
+		State:       "open",
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	for {
+		prs, resp, err := c.client.PullRequests.List(c.ctx, owner, repo, opts)
+		if err != nil {
+			return nil, err
+		}
+		allPRs = append(allPRs, prs...)
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return allPRs, nil
+}
+
+func (c *Client) CompareCommits(owner, repo, base, head string) ([]*github.RepositoryCommit, error) {
+	comparison, _, err := c.client.Repositories.CompareCommits(c.ctx, owner, repo, base, head, nil)
+	if err != nil {
+		return nil, err
+	}
+	return comparison.Commits, nil
 }
 
 func (c *Client) CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error) {

@@ -42,6 +42,7 @@ import (
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	gh "github.com/eeekcct/terrakojo/internal/github"
+	ghapi "github.com/google/go-github/v79/github"
 )
 
 var _ = Describe("Repository Reconciler", func() {
@@ -50,6 +51,7 @@ var _ = Describe("Repository Reconciler", func() {
 		mgrCtx    context.Context
 		mgrCancel context.CancelFunc
 		mgrErrCh  chan error
+		ghManager *fakeGitHubClientManager
 	)
 
 	BeforeEach(func() {
@@ -64,10 +66,11 @@ var _ = Describe("Repository Reconciler", func() {
 		})
 		Expect(err).NotTo(HaveOccurred())
 
+		ghManager = &fakeGitHubClientManager{}
 		reconciler := &RepositoryReconciler{
 			Client:              mgr.GetClient(),
 			Scheme:              mgr.GetScheme(),
-			GitHubClientManager: &fakeGitHubClientManager{},
+			GitHubClientManager: ghManager,
 		}
 		Expect(reconciler.SetupWithManager(mgr)).To(Succeed())
 
@@ -125,6 +128,19 @@ var _ = Describe("Repository Reconciler", func() {
 
 		It("creates Branch resources for default branch commits", func() {
 			ctx := context.Background()
+			sha := "0123456789abcdef0123456789abcdef01234567"
+			ghManager.GetClientForRepositoryFunc = func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
+						return &ghapi.Branch{
+							Name: ghapi.String(branchName),
+							Commit: &ghapi.RepositoryCommit{
+								SHA: ghapi.String(sha),
+							},
+						}, nil
+					},
+				}, nil
+			}
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      "repo-default-commits",
@@ -142,19 +158,6 @@ var _ = Describe("Repository Reconciler", func() {
 			}
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 
-			key := types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}
-			sha := "0123456789abcdef0123456789abcdef01234567"
-			Eventually(func() error {
-				latest := &terrakojoiov1alpha1.Repository{}
-				if err := k8sClient.Get(ctx, key, latest); err != nil {
-					return err
-				}
-				latest.Status.DefaultBranchCommits = []terrakojoiov1alpha1.BranchInfo{
-					{Ref: "main", SHA: sha},
-				}
-				return k8sClient.Status().Update(ctx, latest)
-			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
-
 			branchName := fmt.Sprintf("%s-%s-%s", repo.Spec.Name, hashRef("main"), shortSHA(sha))
 			branchKey := types.NamespacedName{Name: branchName, Namespace: repo.Namespace}
 			Eventually(func(g Gomega) {
@@ -169,6 +172,29 @@ var _ = Describe("Repository Reconciler", func() {
 
 		It("creates Branch resources for non-default BranchList entries", func() {
 			ctx := context.Background()
+			ref := "feature/test"
+			sha := "abcdef0123456789abcdef0123456789abcdef01"
+			ghManager.GetClientForRepositoryFunc = func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
+						return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+					},
+					ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
+						return []*ghapi.Branch{
+							{Name: ghapi.String("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String("sha-main")}},
+							{Name: ghapi.String(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String(sha)}},
+						}, nil
+					},
+					ListOpenPullRequestsFunc: func(owner, repoName string) ([]*ghapi.PullRequest, error) {
+						return []*ghapi.PullRequest{
+							{
+								Number: ghapi.Int(12),
+								Head:   &ghapi.PullRequestBranch{Ref: ghapi.String(ref)},
+							},
+						}, nil
+					},
+				}, nil
+			}
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      "repo-branch-list",
@@ -186,20 +212,6 @@ var _ = Describe("Repository Reconciler", func() {
 			}
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 
-			key := types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}
-			ref := "feature/test"
-			sha := "abcdef0123456789abcdef0123456789abcdef01"
-			Eventually(func() error {
-				latest := &terrakojoiov1alpha1.Repository{}
-				if err := k8sClient.Get(ctx, key, latest); err != nil {
-					return err
-				}
-				latest.Status.BranchList = []terrakojoiov1alpha1.BranchInfo{
-					{Ref: ref, SHA: sha},
-				}
-				return k8sClient.Status().Update(ctx, latest)
-			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
-
 			branchName := fmt.Sprintf("%s-%s-%s", repo.Spec.Name, hashRef(ref), shortSHA(sha))
 			branchKey := types.NamespacedName{Name: branchName, Namespace: repo.Namespace}
 			Eventually(func(g Gomega) {
@@ -207,11 +219,24 @@ var _ = Describe("Repository Reconciler", func() {
 				g.Expect(k8sClient.Get(ctx, branchKey, branch)).To(Succeed())
 				g.Expect(branch.Spec.Name).To(Equal(ref))
 				g.Expect(branch.Spec.SHA).To(Equal(sha))
+				g.Expect(branch.Spec.PRNumber).To(Equal(12))
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 
-		It("deletes stale Branch resources not present in status", func() {
+		It("deletes stale Branch resources not present in GitHub", func() {
 			ctx := context.Background()
+			ghManager.GetClientForRepositoryFunc = func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
+						return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+					},
+					ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
+						return []*ghapi.Branch{
+							{Name: ghapi.String("main"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String("sha-main")}},
+						}, nil
+					},
+				}, nil
+			}
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      "repo-stale-branches",
@@ -247,17 +272,6 @@ var _ = Describe("Repository Reconciler", func() {
 			}
 			Expect(controllerutil.SetControllerReference(repo, stale, mgr.GetScheme())).To(Succeed())
 			Expect(k8sClient.Create(ctx, stale)).To(Succeed())
-
-			key := types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}
-			Eventually(func() error {
-				latest := &terrakojoiov1alpha1.Repository{}
-				if err := k8sClient.Get(ctx, key, latest); err != nil {
-					return err
-				}
-				latest.Status.BranchList = []terrakojoiov1alpha1.BranchInfo{}
-				latest.Status.DefaultBranchCommits = []terrakojoiov1alpha1.BranchInfo{}
-				return k8sClient.Status().Update(ctx, latest)
-			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 
 			staleKey := types.NamespacedName{Name: staleName, Namespace: repo.Namespace}
 			Eventually(func() bool {
@@ -316,37 +330,59 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "list failed"),
-		Entry("syncDefaultBranchCommits error", func() (*RepositoryReconciler, ctrl.Request) {
+		Entry("ensureDefaultBranchCommits error", func() (*RepositoryReconciler, ctrl.Request) {
 			testScheme := newSchemeForGinkgo()
 			repo := newTestRepository("repo-default-sync-error", types.UID("repo-default-sync-error-uid"))
 			prepareRepoForReconcile(repo)
-			repo.Status.DefaultBranchCommits = []terrakojoiov1alpha1.BranchInfo{
-				{Ref: "main", SHA: "0123456789abcdef0123456789abcdef01234567"},
-			}
 			baseClient := newFakeClientWithIndex(testScheme, repo)
+			manager := &fakeGitHubClientManager{
+				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
+							return &ghapi.Branch{
+								Name: ghapi.String(branchName),
+								Commit: &ghapi.RepositoryCommit{
+									SHA: ghapi.String("0123456789abcdef0123456789abcdef01234567"),
+								},
+							}, nil
+						},
+					}, nil
+				},
+			}
 			reconciler := &RepositoryReconciler{
 				Client:              &createErrorClient{Client: baseClient, err: fmt.Errorf("create failed")},
 				Scheme:              testScheme,
-				GitHubClientManager: &fakeGitHubClientManager{},
+				GitHubClientManager: manager,
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "create failed"),
-		Entry("syncBranchList error", func() (*RepositoryReconciler, ctrl.Request) {
+		Entry("syncBranchHeads error", func() (*RepositoryReconciler, ctrl.Request) {
 			testScheme := newSchemeForGinkgo()
 			repo := newTestRepository("repo-branchlist-error", types.UID("repo-branchlist-error-uid"))
 			prepareRepoForReconcile(repo)
 			oldSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			newSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-			repo.Status.BranchList = []terrakojoiov1alpha1.BranchInfo{
-				{Ref: "feature/error", SHA: newSHA},
-			}
 			existing := newTestBranch(repo, "feature/error", oldSHA, 0)
 			Expect(controllerutil.SetControllerReference(repo, existing, testScheme)).To(Succeed())
 			baseClient := newFakeClientWithIndex(testScheme, repo, existing)
+			manager := &fakeGitHubClientManager{
+				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
+							return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+						},
+						ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
+							return []*ghapi.Branch{
+								{Name: ghapi.String("feature/error"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String(newSHA)}},
+							}, nil
+						},
+					}, nil
+				},
+			}
 			reconciler := &RepositoryReconciler{
 				Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete failed")},
 				Scheme:              testScheme,
-				GitHubClientManager: &fakeGitHubClientManager{},
+				GitHubClientManager: manager,
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "delete failed"),
@@ -362,50 +398,67 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "failed to update Repository labels"),
-		Entry("syncBranchList stale delete error", func() (*RepositoryReconciler, ctrl.Request) {
+		Entry("syncBranchHeads stale delete error", func() (*RepositoryReconciler, ctrl.Request) {
 			testScheme := newSchemeForGinkgo()
 			repo := newTestRepository("repo-branchlist-stale-delete", types.UID("repo-branchlist-stale-delete-uid"))
 			prepareRepoForReconcile(repo)
 			stale := newTestBranch(repo, "feature/stale", "1111111111111111111111111111111111111111", 0)
 			Expect(controllerutil.SetControllerReference(repo, stale, testScheme)).To(Succeed())
 			baseClient := newFakeClientWithIndex(testScheme, repo, stale)
+			manager := &fakeGitHubClientManager{
+				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
+							return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+						},
+						ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
+							return []*ghapi.Branch{}, nil
+						},
+					}, nil
+				},
+			}
 			reconciler := &RepositoryReconciler{
 				Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete failed")},
 				Scheme:              testScheme,
-				GitHubClientManager: &fakeGitHubClientManager{},
+				GitHubClientManager: manager,
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "delete failed"),
-		Entry("syncDefaultBranchCommits stale delete error", func() (*RepositoryReconciler, ctrl.Request) {
-			testScheme := newSchemeForGinkgo()
-			repo := newTestRepository("repo-default-stale-delete", types.UID("repo-default-stale-delete-uid"))
-			prepareRepoForReconcile(repo)
-			stale := newTestBranch(repo, repo.Spec.DefaultBranch, "2222222222222222222222222222222222222222", 0)
-			Expect(controllerutil.SetControllerReference(repo, stale, testScheme)).To(Succeed())
-			baseClient := newFakeClientWithIndex(testScheme, repo, stale)
-			reconciler := &RepositoryReconciler{
-				Client:              &deleteErrorClient{Client: baseClient, err: fmt.Errorf("delete failed")},
-				Scheme:              testScheme,
-				GitHubClientManager: &fakeGitHubClientManager{},
-			}
-			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
-		}, "failed to delete stale default branch commit branch"),
 		Entry("updateBranchResource error", func() (*RepositoryReconciler, ctrl.Request) {
 			testScheme := newSchemeForGinkgo()
 			repo := newTestRepository("repo-branch-update-error", types.UID("repo-branch-update-error-uid"))
 			prepareRepoForReconcile(repo)
 			ref := "feature/update"
 			sha := "3333333333333333333333333333333333333333"
-			repo.Status.BranchList = []terrakojoiov1alpha1.BranchInfo{
-				{Ref: ref, SHA: sha, PRNumber: 99},
-			}
 			existing := newTestBranch(repo, ref, sha, 1)
 			Expect(controllerutil.SetControllerReference(repo, existing, testScheme)).To(Succeed())
 			baseClient := newFakeClientWithIndex(testScheme, repo, existing)
+			manager := &fakeGitHubClientManager{
+				GetClientForRepositoryFunc: func(ctx context.Context, repo *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						GetBranchFunc: func(owner, repoName, branchName string) (*ghapi.Branch, error) {
+							return &ghapi.Branch{Name: ghapi.String(branchName)}, nil
+						},
+						ListBranchesFunc: func(owner, repoName string) ([]*ghapi.Branch, error) {
+							return []*ghapi.Branch{
+								{Name: ghapi.String(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.String(sha)}},
+							}, nil
+						},
+						ListOpenPullRequestsFunc: func(owner, repoName string) ([]*ghapi.PullRequest, error) {
+							return []*ghapi.PullRequest{
+								{
+									Number: ghapi.Int(99),
+									Head:   &ghapi.PullRequestBranch{Ref: ghapi.String(ref)},
+								},
+							}, nil
+						},
+					}, nil
+				},
+			}
 			reconciler := &RepositoryReconciler{
 				Client:              &updateErrorClient{Client: baseClient, err: fmt.Errorf("update failed")},
 				Scheme:              testScheme,
-				GitHubClientManager: &fakeGitHubClientManager{},
+				GitHubClientManager: manager,
 			}
 			return reconciler, ctrl.Request{NamespacedName: types.NamespacedName{Name: repo.Name, Namespace: repo.Namespace}}
 		}, "failed to update branch"),
@@ -620,7 +673,7 @@ func TestEnsureBranchResourceScenarios(t *testing.T) {
 	}
 }
 
-func TestSyncDefaultBranchCommitsCreatesAndDeletes(t *testing.T) {
+func TestEnsureDefaultBranchCommitsCreates(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -629,37 +682,22 @@ func TestSyncDefaultBranchCommitsCreatesAndDeletes(t *testing.T) {
 	defaultRef := repo.Spec.DefaultBranch
 
 	shaKeep := "1111111111111111111111111111111111111111"
-	shaStale := "2222222222222222222222222222222222222222"
 	shaNew := "3333333333333333333333333333333333333333"
 
 	branchKeep := newTestBranch(repo, defaultRef, shaKeep, 0)
-	branchStale := newTestBranch(repo, defaultRef, shaStale, 0)
 	require.NoError(t, controllerutil.SetControllerReference(repo, branchKeep, testScheme))
-	require.NoError(t, controllerutil.SetControllerReference(repo, branchStale, testScheme))
 
-	fakeClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(repo, branchKeep, branchStale).Build()
+	fakeClient := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(repo, branchKeep).Build()
 	reconciler := &RepositoryReconciler{
 		Client: fakeClient,
 		Scheme: testScheme,
 	}
 
-	repo.Status.DefaultBranchCommits = []terrakojoiov1alpha1.BranchInfo{
-		{Ref: "", SHA: shaKeep},
-		{Ref: "", SHA: shaNew},
-	}
-
-	branches := map[string][]terrakojoiov1alpha1.Branch{
-		defaultRef: {*branchKeep, *branchStale},
-	}
-
-	err := reconciler.syncDefaultBranchCommits(ctx, repo, branches)
+	err := reconciler.ensureDefaultBranchCommits(ctx, repo, []string{shaKeep, shaNew}, []terrakojoiov1alpha1.Branch{*branchKeep})
 	require.NoError(t, err)
 
 	keepKey := types.NamespacedName{Name: branchKeep.Name, Namespace: branchKeep.Namespace}
 	require.NoError(t, fakeClient.Get(ctx, keepKey, &terrakojoiov1alpha1.Branch{}))
-
-	staleKey := types.NamespacedName{Name: branchStale.Name, Namespace: branchStale.Namespace}
-	require.True(t, apierrors.IsNotFound(fakeClient.Get(ctx, staleKey, &terrakojoiov1alpha1.Branch{})))
 
 	newName := fmt.Sprintf("%s-%s-%s", repo.Spec.Name, hashRef(defaultRef), shortSHA(shaNew))
 	newKey := types.NamespacedName{Name: newName, Namespace: repo.Namespace}
@@ -667,9 +705,6 @@ func TestSyncDefaultBranchCommitsCreatesAndDeletes(t *testing.T) {
 	require.NoError(t, fakeClient.Get(ctx, newKey, created))
 	require.Equal(t, shaNew, created.Spec.SHA)
 	require.Equal(t, defaultRef, created.Spec.Name)
-
-	_, found := branches[defaultRef]
-	require.False(t, found)
 }
 
 func TestReconcileDeletionScenarios(t *testing.T) {
