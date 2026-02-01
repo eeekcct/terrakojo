@@ -675,6 +675,117 @@ var _ = Describe("Branch Controller", func() {
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 
+		It("recreates workflows when SHA changes after completion", func() {
+			var getChangedFilesCalled atomic.Bool
+			ghManager.GetClientForBranchFunc = func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+						getChangedFilesCalled.Store(true)
+						return []string{"infrastructure/app/main.tf"}, nil
+					},
+				}, nil
+			}
+
+			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			templateName := uniqueName("tf-workflow-template-completed")
+			branchName := uniqueName("branch-recreate-completed")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
+			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      templateName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "tf-test",
+					Match: terrakojoiov1alpha1.WorkflowMatch{
+						Paths: []string{"infrastructure/**/*.tf"},
+					},
+					Steps: []terrakojoiov1alpha1.WorkflowStep{
+						{
+							Name:    "plan",
+							Image:   "hashicorp/terraform:latest",
+							Command: []string{"echo", "Planning..."},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
+
+			oldSHA := "0123456789abcdef0123456789abcdef01234567"
+			newSHA := "0123456789abcdef0123456789abcdef01234568"
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      branchName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"terrakojo.io/last-sha": oldSHA,
+					},
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Repository: repoName,
+					Owner:      owner,
+					Name:       "feature/recreate-completed",
+					SHA:        oldSHA,
+				},
+			}
+			attachRepositoryOwnerReference(branch, repo)
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+
+			createdBranch := &terrakojoiov1alpha1.Branch{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), createdBranch)).To(Succeed())
+
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      uniqueName("workflow-completed"),
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      createdBranch.Spec.Owner,
+					Repository: createdBranch.Spec.Repository,
+					Branch:     createdBranch.Name,
+					SHA:        oldSHA,
+					Template:   templateName,
+					Path:       "infrastructure/app",
+				},
+			}
+			Expect(controllerutil.SetControllerReference(createdBranch, workflow, mgr.GetScheme())).To(Succeed())
+			Expect(k8sClient.Create(ctx, workflow)).To(Succeed())
+
+			createdWorkflow := &terrakojoiov1alpha1.Workflow{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workflow), createdWorkflow)).To(Succeed())
+			createdWorkflow.Status.Phase = string(WorkflowPhaseSucceeded)
+			Expect(k8sClient.Status().Update(ctx, createdWorkflow)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				fetched := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetched)).To(Succeed())
+				fetched.Spec.SHA = newSHA
+				g.Expect(k8sClient.Update(ctx, fetched)).To(Succeed())
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+
+			Eventually(getChangedFilesCalled.Load).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
+
+			Eventually(func(g Gomega) {
+				fetchedBranch := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetchedBranch)).To(Succeed())
+				g.Expect(fetchedBranch.Annotations).To(HaveKeyWithValue("terrakojo.io/last-sha", newSHA))
+
+				workflowList := &terrakojoiov1alpha1.WorkflowList{}
+				g.Expect(k8sClient.List(
+					ctx,
+					workflowList,
+					client.InNamespace(namespace),
+					client.MatchingLabels{"terrakojo.io/owner-uid": string(fetchedBranch.UID)},
+				)).To(Succeed())
+				g.Expect(workflowList.Items).To(HaveLen(1))
+				g.Expect(workflowList.Items[0].Spec.SHA).To(Equal(newSHA))
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+		})
+
 		It("uses PR changed files API when PRNumber is set", func() {
 			var prCalled atomic.Bool
 			var commitCalled atomic.Bool

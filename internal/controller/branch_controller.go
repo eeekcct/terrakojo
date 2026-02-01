@@ -121,13 +121,15 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	isDefaultBranch := branch.Spec.Name == repo.Spec.DefaultBranch
 
+	lastSHA := branch.Annotations["terrakojo.io/last-sha"]
+
 	// If all workflows owned by this branch are completed, optionally delete the Branch.
 	workflows, err := r.listWorkflowsForBranch(ctx, &branch)
 	if err != nil {
 		log.Error(err, "Failed to list workflows for branch")
 		return ctrl.Result{}, err
 	}
-	if len(workflows) > 0 && allWorkflowsCompleted(workflows) {
+	if len(workflows) > 0 && allWorkflowsCompleted(workflows) && lastSHA == branch.Spec.SHA {
 		if isDefaultBranch {
 			if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
 				log.Error(err, "Failed to delete completed branch")
@@ -145,7 +147,6 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Deplicate: Check if the SHA has changed since last reconcile
-	lastSHA := branch.Annotations["terrakojo.io/last-sha"]
 	if lastSHA == branch.Spec.SHA {
 		// No changes in SHA, nothing to do
 		return ctrl.Result{}, nil
