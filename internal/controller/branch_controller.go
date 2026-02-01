@@ -479,10 +479,5 @@ func (r *BranchReconciler) getRepositoryForBranch(ctx context.Context, branch *t
 		}
 		return &repo, nil
 	}
-
-	var repo terrakojoiov1alpha1.Repository
-	if err := r.Get(ctx, client.ObjectKey{Name: branch.Spec.Repository, Namespace: branch.Namespace}, &repo); err != nil {
-		return nil, client.IgnoreNotFound(err)
-	}
-	return &repo, nil
+	return nil, nil
 }
