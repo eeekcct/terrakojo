@@ -88,7 +88,7 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 			if *pr.Number <= existing.number {
 				continue
 			}
-			fmt.Printf("Warning: Multiple open PRs for ref %s; using PR #%d instead of #%d\n", ref, *pr.Number, existing.number)
+			// Silently prefer higher PR number when multiple PRs exist for same ref
 		}
 		sha := ""
 		if pr.Head.SHA != nil {
