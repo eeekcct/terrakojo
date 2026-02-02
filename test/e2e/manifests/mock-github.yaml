@@ -65,7 +65,7 @@ data:
                     prs.append({"number": number, "state": "open", "head": {"ref": ref, "sha": sha}})
                 self._send(200, prs)
                 return
-            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/compare/.+\\.\\.\\..+$", path):
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/compare/.+\.\.\..+$", path):
                 head = path.split("...")[-1]
                 self._send(200, {"commits": [{"sha": head}]})
                 return
