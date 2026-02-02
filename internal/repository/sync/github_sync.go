@@ -108,7 +108,10 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 	for _, ref := range newRefs {
 		sha := branchHeads[ref]
 		prInfo, hasPR := prByRef[ref]
-		if sha == "" && hasPR {
+		// Prefer PR head SHA when a PR exists for this ref.
+		// This ensures workflows run against the actual PR code,
+		// not a potentially stale branch SHA or a base repo branch.
+		if hasPR {
 			sha = prInfo.sha
 		}
 		if sha == "" {

@@ -155,6 +155,10 @@ func (h *Handler) requestRepositorySync(webhookInfo ghpkg.WebhookInfo) error {
 		if repo.Annotations == nil {
 			repo.Annotations = map[string]string{}
 		}
+		// Set sync-requested-at annotation to trigger an immediate reconcile.
+		// The annotation value itself is not used by the controller; it only
+		// serves as a trigger for Kubernetes to invoke the Repository reconciler,
+		// which then performs a full sync from GitHub.
 		repo.Annotations[syncRequestAnnotation] = time.Now().UTC().Format(time.RFC3339Nano)
 		return h.client.Update(context.Background(), &repo)
 	})
