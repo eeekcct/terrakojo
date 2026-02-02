@@ -189,7 +189,7 @@ var _ = Describe("Repository Reconciler", func() {
 						return []*ghapi.PullRequest{
 							{
 								Number: ghapi.Ptr(12),
-								Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref)},
+								Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref), SHA: ghapi.Ptr(sha)},
 							},
 						}, nil
 					},
@@ -430,7 +430,7 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 			prepareRepoForReconcile(repo)
 			ref := "feature/update"
 			sha := "3333333333333333333333333333333333333333"
-			existing := newTestBranch(repo, ref, sha, 1)
+			existing := newTestBranch(repo, ref, sha, 1) // Existing PR number: 1
 			Expect(controllerutil.SetControllerReference(repo, existing, testScheme)).To(Succeed())
 			baseClient := newFakeClientWithIndex(testScheme, repo, existing)
 			manager := &fakeGitHubClientManager{
@@ -447,8 +447,8 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 						ListOpenPullRequestsFunc: func(owner, repoName string) ([]*ghapi.PullRequest, error) {
 							return []*ghapi.PullRequest{
 								{
-									Number: ghapi.Ptr(99),
-									Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref)},
+									Number: ghapi.Ptr(99), // New PR number: 99 (different from existing)
+									Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref), SHA: ghapi.Ptr(sha)},
 								},
 							}, nil
 						},
