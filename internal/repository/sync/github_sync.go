@@ -32,7 +32,9 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 
 	commits, err := ghClient.CompareCommits(repo.Spec.Owner, repo.Spec.Name, repo.Status.LastDefaultBranchHeadSHA, headSHA)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compare commits for default branch: %w", err)
+		// Fallback to headSHA if compare fails (e.g., force-push rewrote history).
+		// This ensures default-branch sync continues even after non-fast-forward updates.
+		return []string{headSHA}, nil
 	}
 
 	shas := make([]string, 0, len(commits))
@@ -81,8 +83,12 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 			continue
 		}
 		ref := *pr.Head.Ref
-		if _, exists := prByRef[ref]; exists {
-			continue
+		if existing, exists := prByRef[ref]; exists {
+			// Multiple PRs exist for the same ref; keep the one with the higher number
+			if *pr.Number <= existing.number {
+				continue
+			}
+			fmt.Printf("Warning: Multiple open PRs for ref %s; using PR #%d instead of #%d\n", ref, *pr.Number, existing.number)
 		}
 		sha := ""
 		if pr.Head.SHA != nil {

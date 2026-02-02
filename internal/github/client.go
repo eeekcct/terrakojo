@@ -218,9 +218,14 @@ func (c *Client) ListOpenPullRequests(owner, repo string) ([]*github.PullRequest
 }
 
 func (c *Client) CompareCommits(owner, repo, base, head string) ([]*github.RepositoryCommit, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(c.ctx, owner, repo, base, head, nil)
+	comparison, _, err := c.client.Repositories.CompareCommits(c.ctx, owner, repo, base, head, &github.ListOptions{PerPage: 250})
 	if err != nil {
 		return nil, err
+	}
+	if comparison.TotalCommits != nil && *comparison.TotalCommits > len(comparison.Commits) {
+		// GitHub API returns max 250 commits; log warning if there are more
+		fmt.Printf("Warning: CompareCommits returned %d/%d commits for %s/%s (%s...%s); some commits may be missing\n",
+			len(comparison.Commits), *comparison.TotalCommits, owner, repo, base, head)
 	}
 	return comparison.Commits, nil
 }

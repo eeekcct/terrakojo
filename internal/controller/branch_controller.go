@@ -146,7 +146,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	// Duplicate: Check if the SHA has changed since last reconcile
+	// Check if the SHA has changed since last reconcile
 	if lastSHA == branch.Spec.SHA {
 		// No changes in SHA, nothing to do
 		return ctrl.Result{}, nil
