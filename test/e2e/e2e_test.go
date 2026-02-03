@@ -103,10 +103,13 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Controller manager rollout after env updates failed")
 
-	By("creating the test repository and webhook secret")
-	cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/manifests/repository.yaml")
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to apply repository and secret manifest")
+		By("setting up initial mock GitHub state")
+		updateMockGitHubState(map[string]string{"main": "0000000000000000000000000000000000000000"}, map[int]MockPR{})
+
+		By("creating the test repository and webhook secret")
+		cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/manifests/repository.yaml")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply repository and secret manifest")
 
 		By("creating the workflow template")
 		cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/manifests/workflowtemplate.yaml")
