@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 
 	ghapi "github.com/google/go-github/v79/github"
@@ -18,6 +19,7 @@ const testBaseSHA = "base"
 type fakeGitHubClient struct {
 	GetChangedFilesFunc          func(owner, repo string, prNumber int) ([]string, error)
 	GetChangedFilesForCommitFunc func(owner, repo, sha string) ([]string, error)
+	GetCommitFunc                func(owner, repo, sha string) (*ghapi.RepositoryCommit, error)
 	GetBranchFunc                func(owner, repo, branchName string) (*ghapi.Branch, error)
 	ListBranchesFunc             func(owner, repo string) ([]*ghapi.Branch, error)
 	ListOpenPullRequestsFunc     func(owner, repo string) ([]*ghapi.PullRequest, error)
@@ -40,6 +42,13 @@ func (f *fakeGitHubClient) GetChangedFilesForCommit(owner, repo, sha string) ([]
 		return f.GetChangedFilesForCommitFunc(owner, repo, sha)
 	}
 	return nil, nil
+}
+
+func (f *fakeGitHubClient) GetCommit(owner, repo, sha string) (*ghapi.RepositoryCommit, error) {
+	if f.GetCommitFunc != nil {
+		return f.GetCommitFunc(owner, repo, sha)
+	}
+	return &ghapi.RepositoryCommit{}, nil
 }
 
 func (f *fakeGitHubClient) GetBranch(owner, repo, branchName string) (*ghapi.Branch, error) {
@@ -118,11 +127,32 @@ func TestCollectDefaultBranchCommitsFallsBackOnCompareFailure(t *testing.T) {
 		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
 			return nil, fmt.Errorf("compare failed")
 		},
+		GetCommitFunc: func(owner, repoName, sha string) (*ghapi.RepositoryCommit, error) {
+			return nil, &ghapi.ErrorResponse{Response: &http.Response{StatusCode: http.StatusNotFound}}
+		},
 	}
 
 	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
 	require.NoError(t, err)
 	require.Equal(t, []string{"head"}, shas)
+}
+
+func TestCollectDefaultBranchCommitsReturnsErrorOnCompareFailureWithExistingBase(t *testing.T) {
+	repo := newTestRepository("repo-compare-error-base-exists", types.UID("repo-compare-error-base-exists-uid"))
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
+	ghClient := &fakeGitHubClient{
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
+			return nil, fmt.Errorf("compare failed")
+		},
+		GetCommitFunc: func(owner, repoName, sha string) (*ghapi.RepositoryCommit, error) {
+			return &ghapi.RepositoryCommit{}, nil
+		},
+	}
+
+	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
+	require.Error(t, err)
+	require.Nil(t, shas)
+	require.ErrorContains(t, err, "compare failed")
 }
 
 func TestCollectDefaultBranchCommitsHandlesLargeCommitRange(t *testing.T) {

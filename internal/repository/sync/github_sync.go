@@ -1,11 +1,14 @@
 package sync
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	gh "github.com/eeekcct/terrakojo/internal/github"
+	ghapi "github.com/google/go-github/v79/github"
 )
 
 func FetchDefaultBranchHeadSHA(repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface) (string, error) {
@@ -17,6 +20,28 @@ func FetchDefaultBranchHeadSHA(repo *terrakojoiov1alpha1.Repository, ghClient gh
 		return "", nil
 	}
 	return *branch.Commit.SHA, nil
+}
+
+func isCommitNotFound(err error) bool {
+	var ghErr *ghapi.ErrorResponse
+	if !errors.As(err, &ghErr) || ghErr.Response == nil {
+		return false
+	}
+	return ghErr.Response.StatusCode == http.StatusNotFound
+}
+
+func isBaseCommitMissing(repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface) (bool, error) {
+	if repo.Status.LastDefaultBranchHeadSHA == "" {
+		return false, nil
+	}
+	_, err := ghClient.GetCommit(repo.Spec.Owner, repo.Spec.Name, repo.Status.LastDefaultBranchHeadSHA)
+	if err == nil {
+		return false, nil
+	}
+	if isCommitNotFound(err) {
+		return true, nil
+	}
+	return false, err
 }
 
 // CollectDefaultBranchCommits returns commit SHAs to process.
@@ -36,9 +61,18 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 	// Use CompareCommits to detect truncation
 	result, err := ghClient.CompareCommits(repo.Spec.Owner, repo.Spec.Name, repo.Status.LastDefaultBranchHeadSHA, headSHA)
 	if err != nil {
-		// Fallback to headSHA if compare fails (e.g., force-push rewrote history).
-		// This ensures default-branch sync continues even after non-fast-forward updates.
-		return []string{headSHA}, nil
+		// CompareCommits can fail for transient reasons (rate limit, 5xx, network).
+		// Only fall back to headSHA when the base commit no longer exists, which
+		// indicates a history rewrite (e.g., force-push). Otherwise return the
+		// error to retry and avoid skipping intermediate commits.
+		missing, lookupErr := isBaseCommitMissing(repo, ghClient)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if missing {
+			return []string{headSHA}, nil
+		}
+		return nil, err
 	}
 
 	shas := make([]string, 0, len(result.Commits))

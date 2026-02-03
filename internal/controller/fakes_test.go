@@ -47,6 +47,7 @@ func (f *fakeGitHubClientManager) GetClientForBranch(ctx context.Context, branch
 type fakeGitHubClient struct {
 	GetChangedFilesFunc          func(owner, repo string, prNumber int) ([]string, error)
 	GetChangedFilesForCommitFunc func(owner, repo, sha string) ([]string, error)
+	GetCommitFunc                func(owner, repo, sha string) (*ghapi.RepositoryCommit, error)
 	GetBranchFunc                func(owner, repo, branchName string) (*ghapi.Branch, error)
 	ListBranchesFunc             func(owner, repo string) ([]*ghapi.Branch, error)
 	ListOpenPullRequestsFunc     func(owner, repo string) ([]*ghapi.PullRequest, error)
@@ -69,6 +70,13 @@ func (f *fakeGitHubClient) GetChangedFilesForCommit(owner, repo, sha string) ([]
 		return f.GetChangedFilesForCommitFunc(owner, repo, sha)
 	}
 	return nil, nil
+}
+
+func (f *fakeGitHubClient) GetCommit(owner, repo, sha string) (*ghapi.RepositoryCommit, error) {
+	if f.GetCommitFunc != nil {
+		return f.GetCommitFunc(owner, repo, sha)
+	}
+	return &ghapi.RepositoryCommit{}, nil
 }
 
 func (f *fakeGitHubClient) GetBranch(owner, repo, branchName string) (*ghapi.Branch, error) {

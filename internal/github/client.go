@@ -40,6 +40,7 @@ type GitHubCredentials struct {
 type ClientInterface interface {
 	GetChangedFiles(owner, repo string, prNumber int) ([]string, error)
 	GetChangedFilesForCommit(owner, repo, sha string) ([]string, error)
+	GetCommit(owner, repo, sha string) (*github.RepositoryCommit, error)
 	GetBranch(owner, repo, branchName string) (*github.Branch, error)
 	ListBranches(owner, repo string) ([]*github.Branch, error)
 	ListOpenPullRequests(owner, repo string) ([]*github.PullRequest, error)
@@ -166,7 +167,7 @@ func (c *Client) GetChangedFiles(owner, repo string, prNumber int) ([]string, er
 func (c *Client) GetChangedFilesForCommit(owner, repo, sha string) ([]string, error) {
 	// Note: GetCommit does not support pagination. GitHub returns up to 3000 files in a single response.
 	// Files beyond 3000 are not included, but this is a GitHub API limitation.
-	commit, _, err := c.client.Repositories.GetCommit(c.ctx, owner, repo, sha, nil)
+	commit, err := c.GetCommit(owner, repo, sha)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get commit %s: %w", sha, err)
 	}
@@ -178,6 +179,14 @@ func (c *Client) GetChangedFilesForCommit(owner, repo, sha string) ([]string, er
 		}
 	}
 	return files, nil
+}
+
+func (c *Client) GetCommit(owner, repo, sha string) (*github.RepositoryCommit, error) {
+	commit, _, err := c.client.Repositories.GetCommit(c.ctx, owner, repo, sha, nil)
+	if err != nil {
+		return nil, err
+	}
+	return commit, nil
 }
 
 func (c *Client) GetBranch(owner, repo, branchName string) (*github.Branch, error) {
