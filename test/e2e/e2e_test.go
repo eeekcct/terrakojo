@@ -103,11 +103,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Controller manager rollout after env updates failed")
 
-		By("setting mock GitHub initial state to prevent 404 on first sync")
-		err = updateMockGitHubState(map[string]string{
-			"main": "0000000000000000000000000000000000000000",
-		}, map[string]int{})
-		Expect(err).NotTo(HaveOccurred(), "Failed to set mock GitHub initial state")
+
 		By("creating the test repository and webhook secret")
 		cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/manifests/repository.yaml")
 		_, err = utils.Run(cmd)
