@@ -13,6 +13,13 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// CompareResult contains the result of comparing commits with metadata
+type CompareResult struct {
+	Commits      []*github.RepositoryCommit
+	TotalCommits int
+	Truncated    bool
+}
+
 // GitHubAuthType represents the type of GitHub authentication
 type GitHubAuthType string
 
@@ -36,7 +43,7 @@ type ClientInterface interface {
 	GetBranch(owner, repo, branchName string) (*github.Branch, error)
 	ListBranches(owner, repo string) ([]*github.Branch, error)
 	ListOpenPullRequests(owner, repo string) ([]*github.PullRequest, error)
-	CompareCommits(owner, repo, base, head string) ([]*github.RepositoryCommit, error)
+	CompareCommits(owner, repo, base, head string) (*CompareResult, error)
 	CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error)
 	UpdateCheckRun(owner, repo string, checkRunID int64, name, status, conclusion string) error
 }
@@ -217,14 +224,24 @@ func (c *Client) ListOpenPullRequests(owner, repo string) ([]*github.PullRequest
 	return allPRs, nil
 }
 
-func (c *Client) CompareCommits(owner, repo, base, head string) ([]*github.RepositoryCommit, error) {
-	// TODO: Handle pagination for >250 commits. GitHub API returns max 250 commits per call.
-	// If TotalCommits > 250, we need to implement pagination or alternative approach.
+func (c *Client) CompareCommits(owner, repo, base, head string) (*CompareResult, error) {
 	comparison, _, err := c.client.Repositories.CompareCommits(c.ctx, owner, repo, base, head, &github.ListOptions{PerPage: 250})
 	if err != nil {
 		return nil, err
 	}
-	return comparison.Commits, nil
+
+	totalCommits := 0
+	if comparison.TotalCommits != nil {
+		totalCommits = *comparison.TotalCommits
+	}
+
+	truncated := totalCommits > 250
+
+	return &CompareResult{
+		Commits:      comparison.Commits,
+		TotalCommits: totalCommits,
+		Truncated:    truncated,
+	}, nil
 }
 
 func (c *Client) CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error) {

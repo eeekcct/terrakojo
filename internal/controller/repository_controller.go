@@ -167,8 +167,15 @@ func (r *RepositoryReconciler) syncFromGitHub(ctx context.Context, repo *terrako
 			return err
 		}
 
-		if repo.Status.LastDefaultBranchHeadSHA != defaultHeadSHA {
-			repo.Status.LastDefaultBranchHeadSHA = defaultHeadSHA
+		// Update LastDefaultBranchHeadSHA to the last processed commit
+		// When >250 commits exist, this will be the 250th commit, not defaultHeadSHA
+		// Next reconcile will process remaining commits incrementally
+		newLastSHA := defaultHeadSHA
+		if len(commitSHAs) > 0 {
+			newLastSHA = commitSHAs[len(commitSHAs)-1]
+		}
+		if repo.Status.LastDefaultBranchHeadSHA != newLastSHA {
+			repo.Status.LastDefaultBranchHeadSHA = newLastSHA
 			if err := r.Status().Update(ctx, repo); err != nil {
 				return err
 			}

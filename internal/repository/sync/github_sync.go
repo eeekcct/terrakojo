@@ -19,6 +19,9 @@ func FetchDefaultBranchHeadSHA(repo *terrakojoiov1alpha1.Repository, ghClient gh
 	return *branch.Commit.SHA, nil
 }
 
+// CollectDefaultBranchCommits returns commit SHAs to process.
+// When >250 commits exist, returns first 250 and caller should update
+// LastDefaultBranchHeadSHA to the last returned SHA for incremental processing.
 func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface, headSHA string) ([]string, error) {
 	if headSHA == "" {
 		return nil, nil
@@ -30,15 +33,16 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 		return nil, nil
 	}
 
-	commits, err := ghClient.CompareCommits(repo.Spec.Owner, repo.Spec.Name, repo.Status.LastDefaultBranchHeadSHA, headSHA)
+	// Use CompareCommits to detect truncation
+	result, err := ghClient.CompareCommits(repo.Spec.Owner, repo.Spec.Name, repo.Status.LastDefaultBranchHeadSHA, headSHA)
 	if err != nil {
 		// Fallback to headSHA if compare fails (e.g., force-push rewrote history).
 		// This ensures default-branch sync continues even after non-fast-forward updates.
 		return []string{headSHA}, nil
 	}
 
-	shas := make([]string, 0, len(commits))
-	for _, commit := range commits {
+	shas := make([]string, 0, len(result.Commits))
+	for _, commit := range result.Commits {
 		if commit == nil || commit.SHA == nil {
 			continue
 		}
@@ -47,6 +51,8 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 	if len(shas) == 0 {
 		return []string{headSHA}, nil
 	}
+	// When truncated, remaining commits will be processed in next reconcile
+	// after LastDefaultBranchHeadSHA is updated to the last SHA in this batch
 	return shas, nil
 }
 

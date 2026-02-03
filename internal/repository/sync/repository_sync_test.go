@@ -19,7 +19,7 @@ type fakeGitHubClient struct {
 	GetBranchFunc                func(owner, repo, branchName string) (*ghapi.Branch, error)
 	ListBranchesFunc             func(owner, repo string) ([]*ghapi.Branch, error)
 	ListOpenPullRequestsFunc     func(owner, repo string) ([]*ghapi.PullRequest, error)
-	CompareCommitsFunc           func(owner, repo, base, head string) ([]*ghapi.RepositoryCommit, error)
+	CompareCommitsFunc           func(owner, repo, base, head string) (*gh.CompareResult, error)
 	CreateCheckRunFunc           func(owner, repo, sha, name string) (*ghapi.CheckRun, error)
 	UpdateCheckRunFunc           func(owner, repo string, checkRunID int64, name, status, conclusion string) error
 }
@@ -61,11 +61,15 @@ func (f *fakeGitHubClient) ListOpenPullRequests(owner, repo string) ([]*ghapi.Pu
 	return []*ghapi.PullRequest{}, nil
 }
 
-func (f *fakeGitHubClient) CompareCommits(owner, repo, base, head string) ([]*ghapi.RepositoryCommit, error) {
+func (f *fakeGitHubClient) CompareCommits(owner, repo, base, head string) (*gh.CompareResult, error) {
 	if f.CompareCommitsFunc != nil {
 		return f.CompareCommitsFunc(owner, repo, base, head)
 	}
-	return []*ghapi.RepositoryCommit{}, nil
+	return &gh.CompareResult{
+		Commits:      []*ghapi.RepositoryCommit{},
+		TotalCommits: 0,
+		Truncated:    false,
+	}, nil
 }
 
 func (f *fakeGitHubClient) CreateCheckRun(owner, repo, sha, name string) (*ghapi.CheckRun, error) {
@@ -86,12 +90,16 @@ func TestCollectDefaultBranchCommitsUsesCompare(t *testing.T) {
 	repo := newTestRepository("repo-compare", types.UID("repo-compare-uid"))
 	repo.Status.LastDefaultBranchHeadSHA = "base"
 	ghClient := &fakeGitHubClient{
-		CompareCommitsFunc: func(owner, repoName, base, head string) ([]*ghapi.RepositoryCommit, error) {
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
 			require.Equal(t, "base", base)
 			require.Equal(t, "head", head)
-			return []*ghapi.RepositoryCommit{
-				{SHA: ghapi.Ptr("sha-1")},
-				{SHA: ghapi.Ptr("sha-2")},
+			return &gh.CompareResult{
+				Commits: []*ghapi.RepositoryCommit{
+					{SHA: ghapi.Ptr("sha-1")},
+					{SHA: ghapi.Ptr("sha-2")},
+				},
+				TotalCommits: 2,
+				Truncated:    false,
 			}, nil
 		},
 	}
@@ -105,7 +113,7 @@ func TestCollectDefaultBranchCommitsFallsBackOnCompareFailure(t *testing.T) {
 	repo := newTestRepository("repo-compare-error", types.UID("repo-compare-error-uid"))
 	repo.Status.LastDefaultBranchHeadSHA = "base"
 	ghClient := &fakeGitHubClient{
-		CompareCommitsFunc: func(owner, repoName, base, head string) ([]*ghapi.RepositoryCommit, error) {
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
 			return nil, fmt.Errorf("compare failed")
 		},
 	}
@@ -113,6 +121,97 @@ func TestCollectDefaultBranchCommitsFallsBackOnCompareFailure(t *testing.T) {
 	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
 	require.NoError(t, err)
 	require.Equal(t, []string{"head"}, shas)
+}
+
+func TestCollectDefaultBranchCommitsHandlesLargeCommitRange(t *testing.T) {
+	repo := newTestRepository("repo-large", types.UID("repo-large-uid"))
+	repo.Status.LastDefaultBranchHeadSHA = "base"
+
+	// Simulate >250 commits scenario where CompareCommits returns first 250
+	ghClient := &fakeGitHubClient{
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
+			require.Equal(t, "base", base)
+			require.Equal(t, "head", head)
+
+			// GitHub API returns first 250 commits when total is 300
+			commits := make([]*ghapi.RepositoryCommit, 250)
+			for i := 0; i < 250; i++ {
+				commits[i] = &ghapi.RepositoryCommit{
+					SHA: ghapi.Ptr(fmt.Sprintf("sha-%d", i)),
+				}
+			}
+
+			return &gh.CompareResult{
+				Commits:      commits,
+				TotalCommits: 300,
+				Truncated:    true,
+			}, nil
+		},
+	}
+
+	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
+	require.NoError(t, err)
+	require.Len(t, shas, 250, "should return first 250 commits")
+	require.Equal(t, "sha-0", shas[0])
+	require.Equal(t, "sha-249", shas[249])
+
+	// In practice, controller would update LastDefaultBranchHeadSHA to "sha-249"
+	// and next reconcile would fetch remaining 50 commits
+}
+
+func TestCollectDefaultBranchCommitsIncrementalProcessing(t *testing.T) {
+	repo := newTestRepository("repo-incremental", types.UID("repo-incremental-uid"))
+
+	// First reconcile: process first 250 commits
+	repo.Status.LastDefaultBranchHeadSHA = "base"
+	ghClient := &fakeGitHubClient{
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
+			if base == "base" && head == "head" {
+				// First batch: 250 commits
+				commits := make([]*ghapi.RepositoryCommit, 250)
+				for i := 0; i < 250; i++ {
+					commits[i] = &ghapi.RepositoryCommit{
+						SHA: ghapi.Ptr(fmt.Sprintf("sha-%d", i)),
+					}
+				}
+				return &gh.CompareResult{
+					Commits:      commits,
+					TotalCommits: 300,
+					Truncated:    true,
+				}, nil
+			} else if base == "sha-249" && head == "head" {
+				// Second batch: remaining 50 commits
+				commits := make([]*ghapi.RepositoryCommit, 50)
+				for i := 0; i < 50; i++ {
+					commits[i] = &ghapi.RepositoryCommit{
+						SHA: ghapi.Ptr(fmt.Sprintf("sha-%d", 250+i)),
+					}
+				}
+				return &gh.CompareResult{
+					Commits:      commits,
+					TotalCommits: 50,
+					Truncated:    false,
+				}, nil
+			}
+			return nil, fmt.Errorf("unexpected base/head: %s/%s", base, head)
+		},
+	}
+
+	// First reconcile
+	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
+	require.NoError(t, err)
+	require.Len(t, shas, 250)
+	require.Equal(t, "sha-249", shas[249])
+
+	// Controller updates LastDefaultBranchHeadSHA to last processed commit
+	repo.Status.LastDefaultBranchHeadSHA = shas[len(shas)-1]
+
+	// Second reconcile: fetch remaining commits
+	shas, err = CollectDefaultBranchCommits(repo, ghClient, "head")
+	require.NoError(t, err)
+	require.Len(t, shas, 50)
+	require.Equal(t, "sha-250", shas[0])
+	require.Equal(t, "sha-299", shas[49])
 }
 
 func TestFetchBranchHeadsFromGitHub(t *testing.T) {
