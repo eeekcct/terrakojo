@@ -12,9 +12,7 @@ data:
 
     CHECK_RUNS = {}
     NEXT_CHECK_RUN_ID = 100
-    BRANCHES = {
-        "main": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-    }
+    BRANCHES = {}
     OPEN_PRS = {}
 
     class Handler(BaseHTTPRequestHandler):
@@ -67,7 +65,7 @@ data:
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/compare/.+\.\.\..+$", path):
                 head = path.split("...")[-1]
-                self._send(200, {"commits": [{"sha": head}]})
+                self._send(200, {"commits": [{"sha": head}], "total_commits": 1})
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/commits/[^/]+$", path):
                 self._send(200, {"files": [{"filename": "infra/main.tf"}]})
