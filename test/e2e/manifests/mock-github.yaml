@@ -12,7 +12,8 @@ data:
 
     CHECK_RUNS = {}
     NEXT_CHECK_RUN_ID = 100
-    BRANCHES = {}
+    # Initialize with empty main branch to prevent 404 on first sync
+    BRANCHES = {"main": "0000000000000000000000000000000000000000"}
     OPEN_PRS = {}
 
     class Handler(BaseHTTPRequestHandler):
