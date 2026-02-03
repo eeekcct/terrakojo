@@ -13,6 +13,8 @@ import (
 	gh "github.com/eeekcct/terrakojo/internal/github"
 )
 
+const testBaseSHA = "base"
+
 type fakeGitHubClient struct {
 	GetChangedFilesFunc          func(owner, repo string, prNumber int) ([]string, error)
 	GetChangedFilesForCommitFunc func(owner, repo, sha string) ([]string, error)
@@ -88,10 +90,10 @@ func (f *fakeGitHubClient) UpdateCheckRun(owner, repo string, checkRunID int64, 
 
 func TestCollectDefaultBranchCommitsUsesCompare(t *testing.T) {
 	repo := newTestRepository("repo-compare", types.UID("repo-compare-uid"))
-	repo.Status.LastDefaultBranchHeadSHA = "base"
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
 	ghClient := &fakeGitHubClient{
 		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
-			require.Equal(t, "base", base)
+			require.Equal(t, testBaseSHA, base)
 			require.Equal(t, "head", head)
 			return &gh.CompareResult{
 				Commits: []*ghapi.RepositoryCommit{
@@ -111,7 +113,7 @@ func TestCollectDefaultBranchCommitsUsesCompare(t *testing.T) {
 
 func TestCollectDefaultBranchCommitsFallsBackOnCompareFailure(t *testing.T) {
 	repo := newTestRepository("repo-compare-error", types.UID("repo-compare-error-uid"))
-	repo.Status.LastDefaultBranchHeadSHA = "base"
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
 	ghClient := &fakeGitHubClient{
 		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
 			return nil, fmt.Errorf("compare failed")
@@ -125,12 +127,12 @@ func TestCollectDefaultBranchCommitsFallsBackOnCompareFailure(t *testing.T) {
 
 func TestCollectDefaultBranchCommitsHandlesLargeCommitRange(t *testing.T) {
 	repo := newTestRepository("repo-large", types.UID("repo-large-uid"))
-	repo.Status.LastDefaultBranchHeadSHA = "base"
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
 
 	// Simulate >250 commits scenario where CompareCommits returns first 250
 	ghClient := &fakeGitHubClient{
 		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
-			require.Equal(t, "base", base)
+			require.Equal(t, testBaseSHA, base)
 			require.Equal(t, "head", head)
 
 			// GitHub API returns first 250 commits when total is 300
@@ -163,10 +165,10 @@ func TestCollectDefaultBranchCommitsIncrementalProcessing(t *testing.T) {
 	repo := newTestRepository("repo-incremental", types.UID("repo-incremental-uid"))
 
 	// First reconcile: process first 250 commits
-	repo.Status.LastDefaultBranchHeadSHA = "base"
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
 	ghClient := &fakeGitHubClient{
 		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
-			if base == "base" && head == "head" {
+			if base == testBaseSHA && head == "head" {
 				// First batch: 250 commits
 				commits := make([]*ghapi.RepositoryCommit, 250)
 				for i := 0; i < 250; i++ {
