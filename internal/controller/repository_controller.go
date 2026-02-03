@@ -44,7 +44,12 @@ type RepositoryReconciler struct {
 }
 
 const repositoryFinalizer = "terrakojo.io/cleanup-branches"
-const repositorySyncInterval = 2 * time.Minute
+
+// repositorySyncInterval is the interval at which the controller polls GitHub for changes.
+// Webhooks should be the primary trigger for syncs, so this is kept long to minimize
+// API rate limit usage. The annotation-based sync request from webhooks provides
+// immediate sync when changes occur.
+const repositorySyncInterval = 30 * time.Minute
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories/status,verbs=get;update;patch
