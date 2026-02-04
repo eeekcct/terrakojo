@@ -198,6 +198,28 @@ func TestCollectDefaultBranchCommitsReturnsErrorOnEmptyCompareWithExistingBase(t
 	require.ErrorContains(t, err, "returned no commits")
 }
 
+func TestCollectDefaultBranchCommitsFallsBackOnEmptyCompareWhenBehind(t *testing.T) {
+	repo := newTestRepository("repo-compare-empty-behind", types.UID("repo-compare-empty-behind-uid"))
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
+	ghClient := &fakeGitHubClient{
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
+			return &gh.CompareResult{
+				Commits:      []*ghapi.RepositoryCommit{},
+				TotalCommits: 0,
+				Truncated:    false,
+				Status:       "behind",
+			}, nil
+		},
+		GetCommitFunc: func(owner, repoName, sha string) (*ghapi.RepositoryCommit, error) {
+			return &ghapi.RepositoryCommit{}, nil
+		},
+	}
+
+	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
+	require.NoError(t, err)
+	require.Equal(t, []string{"head"}, shas)
+}
+
 func TestCollectDefaultBranchCommitsHandlesLargeCommitRange(t *testing.T) {
 	repo := newTestRepository("repo-large", types.UID("repo-large-uid"))
 	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA

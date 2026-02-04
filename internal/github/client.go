@@ -18,6 +18,7 @@ type CompareResult struct {
 	Commits      []*github.RepositoryCommit
 	TotalCommits int
 	Truncated    bool
+	Status       string
 }
 
 // GitHubAuthType represents the type of GitHub authentication
@@ -243,6 +244,10 @@ func (c *Client) CompareCommits(owner, repo, base, head string) (*CompareResult,
 	if comparison.TotalCommits != nil {
 		totalCommits = *comparison.TotalCommits
 	}
+	status := ""
+	if comparison.Status != nil {
+		status = *comparison.Status
+	}
 
 	// Determine if the result set is truncated. Prefer TotalCommits when available;
 	// otherwise fall back to a page-size heuristic.
@@ -257,6 +262,7 @@ func (c *Client) CompareCommits(owner, repo, base, head string) (*CompareResult,
 		Commits:      comparison.Commits,
 		TotalCommits: totalCommits,
 		Truncated:    truncated,
+		Status:       status,
 	}, nil
 }
 

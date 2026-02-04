@@ -86,6 +86,9 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 		shas = append(shas, *commit.SHA)
 	}
 	if len(shas) == 0 {
+		if result.Status == "behind" {
+			return []string{headSHA}, nil
+		}
 		// CompareCommits returned successfully but without commits. Only fall back
 		// when the base commit no longer exists; otherwise retry to avoid skipping
 		// intermediate commits when histories diverge.
