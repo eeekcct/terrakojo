@@ -12,6 +12,8 @@ data:
 
     CHECK_RUNS = {}
     NEXT_CHECK_RUN_ID = 100
+    BRANCHES = {}
+    OPEN_PRS = {}
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code, body):
@@ -31,10 +33,39 @@ data:
             except json.JSONDecodeError:
                 return {}
 
+        def _branches_payload(self):
+            return [{"name": ref, "commit": {"sha": sha}} for ref, sha in BRANCHES.items()]
+
         def do_GET(self):
             path = urlparse(self.path).path
             if path == "/api/v3/_meta/check-runs":
                 self._send(200, {"check_runs": list(CHECK_RUNS.values())})
+                return
+            if path == "/api/v3/_meta/state":
+                self._send(200, {"branches": BRANCHES, "open_prs": OPEN_PRS})
+                return
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/branches$", path):
+                self._send(200, self._branches_payload())
+                return
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/branches/[^/]+$", path):
+                branch = path.split("/")[-1]
+                sha = BRANCHES.get(branch)
+                if sha is None:
+                    self._send(404, {"message": "not found"})
+                else:
+                    self._send(200, {"name": branch, "commit": {"sha": sha}})
+                return
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/pulls$", path):
+                prs = []
+                for ref, info in OPEN_PRS.items():
+                    number = info.get("number")
+                    sha = info.get("sha") or BRANCHES.get(ref)
+                    prs.append({"number": number, "state": "open", "head": {"ref": ref, "sha": sha}})
+                self._send(200, prs)
+                return
+            if re.match(r"^/api/v3/repos/[^/]+/[^/]+/compare/.+\.\.\..+$", path):
+                head = path.split("...")[-1]
+                self._send(200, {"commits": [{"sha": head}], "total_commits": 1})
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/commits/[^/]+$", path):
                 self._send(200, {"files": [{"filename": "infra/main.tf"}]})
@@ -46,6 +77,27 @@ data:
 
         def do_POST(self):
             path = urlparse(self.path).path
+            if path == "/api/v3/_meta/state":
+                global BRANCHES
+                global OPEN_PRS
+                payload = self._read_json()
+                branches = payload.get("branches")
+                if isinstance(branches, dict):
+                    BRANCHES = branches
+                open_prs = payload.get("open_prs")
+                if isinstance(open_prs, dict):
+                    updated = {}
+                    for ref, value in open_prs.items():
+                        if isinstance(value, dict):
+                            number = int(value.get("number", 0))
+                            sha = value.get("sha")
+                        else:
+                            number = int(value)
+                            sha = None
+                        updated[ref] = {"number": number, "sha": sha}
+                    OPEN_PRS = updated
+                self._send(200, {"branches": BRANCHES, "open_prs": OPEN_PRS})
+                return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/check-runs$", path):
                 global NEXT_CHECK_RUN_ID
                 payload = self._read_json()

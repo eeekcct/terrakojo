@@ -382,7 +382,7 @@ func makeRequest(t *testing.T, event string, body []byte) *http.Request {
 	return req
 }
 
-func TestPushDefaultBranchEnqueuesCommit(t *testing.T) {
+func TestPushDefaultBranchRequestsSync(t *testing.T) {
 	body := mustLoadPayload(t, "github-push-default-branch.json")
 	repo := baseRepo()
 	handler := newWebhookHandlerWithRepo(t, repo)
@@ -393,25 +393,15 @@ func TestPushDefaultBranchEnqueuesCommit(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rr.Code)
 
-	// verify status updated
 	cl := handler.client
 	var updated v1alpha1.Repository
 	require.NoError(t, cl.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
-	require.Len(t, updated.Status.DefaultBranchCommits, 1)
-	require.Equal(t, "main", updated.Status.DefaultBranchCommits[0].Ref)
-	require.Equal(t, "1111111111111111111111111111111111111111", updated.Status.DefaultBranchCommits[0].SHA)
-	// branchList untouched
-	require.Len(t, updated.Status.BranchList, 0)
+	require.NotEmpty(t, updated.Annotations[syncRequestAnnotation])
 }
 
-func TestPushFeatureBranchUpdatesBranchList(t *testing.T) {
+func TestPushFeatureBranchRequestsSync(t *testing.T) {
 	body := mustLoadPayload(t, "github-push-feature-branch.json")
 	repo := baseRepo()
-	// Pretend we already had an older SHA
-	repo.Status.BranchList = []v1alpha1.BranchInfo{{
-		Ref: "feature/add-api",
-		SHA: "oldoldoldoldoldoldoldoldoldoldoldoldoldoldol",
-	}}
 	handler := newWebhookHandlerWithRepo(t, repo)
 
 	req := makeRequest(t, string(github.EventTypePush), body)
@@ -421,13 +411,10 @@ func TestPushFeatureBranchUpdatesBranchList(t *testing.T) {
 
 	var updated v1alpha1.Repository
 	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
-	require.Len(t, updated.Status.BranchList, 1)
-	info := updated.Status.BranchList[0]
-	require.Equal(t, "feature/add-api", info.Ref)
-	require.Equal(t, "2222222222222222222222222222222222222222", info.SHA)
+	require.NotEmpty(t, updated.Annotations[syncRequestAnnotation])
 }
 
-func TestPROpenSyncCloseLifecycle(t *testing.T) {
+func TestPROpenSyncCloseLifecycleRequestsSync(t *testing.T) {
 	openBody := mustLoadPayload(t, "github-pull-request-opened-simple.json")
 	syncBody := mustLoadPayload(t, "github-pull-request-synchronize-simple.json")
 	closeBody := mustLoadPayload(t, "github-pull-request-closed-merged.json")
@@ -442,9 +429,8 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 
 	var updated v1alpha1.Repository
 	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
-	require.Len(t, updated.Status.BranchList, 1)
-	require.Equal(t, "feature/auth", updated.Status.BranchList[0].Ref)
-	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", updated.Status.BranchList[0].SHA)
+	firstSync := updated.Annotations[syncRequestAnnotation]
+	require.NotEmpty(t, firstSync)
 
 	// synchronize: SHA should update
 	rr = httptest.NewRecorder()
@@ -452,8 +438,8 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
-	require.Len(t, updated.Status.BranchList, 1)
-	require.Equal(t, "3333333333333333333333333333333333333333", updated.Status.BranchList[0].SHA)
+	secondSync := updated.Annotations[syncRequestAnnotation]
+	require.NotEmpty(t, secondSync)
 
 	// closed: entry removed
 	rr = httptest.NewRecorder()
@@ -461,13 +447,11 @@ func TestPROpenSyncCloseLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
-	require.Len(t, updated.Status.BranchList, 0)
-	require.Len(t, updated.Status.DefaultBranchCommits, 1)
-	require.Equal(t, "main", updated.Status.DefaultBranchCommits[0].Ref)
-	require.Equal(t, "4444444444444444444444444444444444444444", updated.Status.DefaultBranchCommits[0].SHA)
+	thirdSync := updated.Annotations[syncRequestAnnotation]
+	require.NotEmpty(t, thirdSync)
 }
 
-func TestPRFromDefaultBranchDoesNotUpdateBranchList(t *testing.T) {
+func TestPRFromDefaultBranchRequestsSync(t *testing.T) {
 	openBody := mustLoadPayload(t, "github-pull-request-opened-default-branch.json")
 
 	repo := baseRepo()
@@ -480,8 +464,5 @@ func TestPRFromDefaultBranchDoesNotUpdateBranchList(t *testing.T) {
 
 	var updated v1alpha1.Repository
 	require.NoError(t, handler.client.Get(context.Background(), client.ObjectKey{Name: repo.Name, Namespace: repo.Namespace}, &updated))
-	// Default branch should NOT be added to BranchList
-	require.Len(t, updated.Status.BranchList, 0)
-	// Default branch should NOT be added to DefaultBranchCommits for PR open
-	require.Len(t, updated.Status.DefaultBranchCommits, 0)
+	require.NotEmpty(t, updated.Annotations[syncRequestAnnotation])
 }

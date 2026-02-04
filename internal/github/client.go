@@ -13,6 +13,14 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// CompareResult contains the result of comparing commits with metadata
+type CompareResult struct {
+	Commits      []*github.RepositoryCommit
+	TotalCommits int
+	Truncated    bool
+	Status       string
+}
+
 // GitHubAuthType represents the type of GitHub authentication
 type GitHubAuthType string
 
@@ -33,7 +41,11 @@ type GitHubCredentials struct {
 type ClientInterface interface {
 	GetChangedFiles(owner, repo string, prNumber int) ([]string, error)
 	GetChangedFilesForCommit(owner, repo, sha string) ([]string, error)
+	GetCommit(owner, repo, sha string) (*github.RepositoryCommit, error)
 	GetBranch(owner, repo, branchName string) (*github.Branch, error)
+	ListBranches(owner, repo string) ([]*github.Branch, error)
+	ListOpenPullRequests(owner, repo string) ([]*github.PullRequest, error)
+	CompareCommits(owner, repo, base, head string) (*CompareResult, error)
 	CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error)
 	UpdateCheckRun(owner, repo string, checkRunID int64, name, status, conclusion string) error
 }
@@ -156,7 +168,7 @@ func (c *Client) GetChangedFiles(owner, repo string, prNumber int) ([]string, er
 func (c *Client) GetChangedFilesForCommit(owner, repo, sha string) ([]string, error) {
 	// Note: GetCommit does not support pagination. GitHub returns up to 3000 files in a single response.
 	// Files beyond 3000 are not included, but this is a GitHub API limitation.
-	commit, _, err := c.client.Repositories.GetCommit(c.ctx, owner, repo, sha, nil)
+	commit, err := c.GetCommit(owner, repo, sha)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get commit %s: %w", sha, err)
 	}
@@ -170,9 +182,88 @@ func (c *Client) GetChangedFilesForCommit(owner, repo, sha string) ([]string, er
 	return files, nil
 }
 
+func (c *Client) GetCommit(owner, repo, sha string) (*github.RepositoryCommit, error) {
+	commit, _, err := c.client.Repositories.GetCommit(c.ctx, owner, repo, sha, nil)
+	if err != nil {
+		return nil, err
+	}
+	return commit, nil
+}
+
 func (c *Client) GetBranch(owner, repo, branchName string) (*github.Branch, error) {
 	branch, _, err := c.client.Repositories.GetBranch(c.ctx, owner, repo, branchName, 3)
 	return branch, err
+}
+
+func (c *Client) ListBranches(owner, repo string) ([]*github.Branch, error) {
+	var allBranches []*github.Branch
+	opts := &github.BranchListOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	for {
+		branches, resp, err := c.client.Repositories.ListBranches(c.ctx, owner, repo, opts)
+		if err != nil {
+			return nil, err
+		}
+		allBranches = append(allBranches, branches...)
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return allBranches, nil
+}
+
+func (c *Client) ListOpenPullRequests(owner, repo string) ([]*github.PullRequest, error) {
+	var allPRs []*github.PullRequest
+	opts := &github.PullRequestListOptions{
+		State:       "open",
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	for {
+		prs, resp, err := c.client.PullRequests.List(c.ctx, owner, repo, opts)
+		if err != nil {
+			return nil, err
+		}
+		allPRs = append(allPRs, prs...)
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return allPRs, nil
+}
+
+func (c *Client) CompareCommits(owner, repo, base, head string) (*CompareResult, error) {
+	comparison, _, err := c.client.Repositories.CompareCommits(c.ctx, owner, repo, base, head, &github.ListOptions{PerPage: 250})
+	if err != nil {
+		return nil, err
+	}
+
+	totalCommits := 0
+	if comparison.TotalCommits != nil {
+		totalCommits = *comparison.TotalCommits
+	}
+	status := ""
+	if comparison.Status != nil {
+		status = *comparison.Status
+	}
+
+	// Determine if the result set is truncated. Prefer TotalCommits when available;
+	// otherwise fall back to a page-size heuristic.
+	truncated := false
+	if comparison.TotalCommits != nil {
+		truncated = len(comparison.Commits) < *comparison.TotalCommits
+	} else {
+		truncated = len(comparison.Commits) == 250
+	}
+
+	return &CompareResult{
+		Commits:      comparison.Commits,
+		TotalCommits: totalCommits,
+		Truncated:    truncated,
+		Status:       status,
+	}, nil
 }
 
 func (c *Client) CreateCheckRun(owner, repo, sha, name string) (*github.CheckRun, error) {

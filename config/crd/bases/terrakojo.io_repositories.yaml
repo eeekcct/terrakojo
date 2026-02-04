@@ -72,27 +72,6 @@ spec:
           status:
             description: status defines the observed state of Repository
             properties:
-              branchList:
-                description: |-
-                  BranchList contains the list of branches associated with this repository
-                  Each branch contains detailed information including commit SHA and PR number
-                items:
-                  description: BranchInfo represents a branch within a repository
-                  properties:
-                    prNumber:
-                      description: PRNumber is the pull request number associated
-                        with this branch (if any)
-                      type: integer
-                    ref:
-                      description: Ref is the branch name (e.g., "main", "feature/test")
-                      type: string
-                    sha:
-                      description: SHA is the commit SHA of the branch head
-                      type: string
-                  required:
-                  - ref
-                  type: object
-                type: array
               conditions:
                 description: |-
                   conditions represent the current state of the Repository resource.
@@ -162,28 +141,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              defaultBranchCommits:
-                description: |-
-                  DefaultBranchCommits keeps a queue of commits that have landed on the default branch.
-                  This is used to ensure each merge/push to the default branch gets processed even if multiple
-                  commits arrive while existing jobs are still running.
-                items:
-                  description: BranchInfo represents a branch within a repository
-                  properties:
-                    prNumber:
-                      description: PRNumber is the pull request number associated
-                        with this branch (if any)
-                      type: integer
-                    ref:
-                      description: Ref is the branch name (e.g., "main", "feature/test")
-                      type: string
-                    sha:
-                      description: SHA is the commit SHA of the branch head
-                      type: string
-                  required:
-                  - ref
-                  type: object
-                type: array
+              lastDefaultBranchHeadSha:
+                description: LastDefaultBranchHeadSHA stores the default branch head
+                  SHA observed during the last GitHub sync.
+                type: string
               synced:
                 description: Synced indicates whether the repository has been successfully
                   synced

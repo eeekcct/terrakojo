@@ -45,6 +45,8 @@ import (
 
 var nameCounter uint64
 
+const defaultBranchName = "main"
+
 func uniqueName(base string) string {
 	return fmt.Sprintf("%s-%d-%d", base, GinkgoParallelProcess(), atomic.AddUint64(&nameCounter, 1))
 }
@@ -57,6 +59,47 @@ func createTestNamespace(ctx context.Context) string {
 	}
 	Expect(k8sClient.Create(ctx, ns)).To(Succeed())
 	return ns.Name
+}
+
+func newBranchRepository(namespace, owner, repoName string) *terrakojoiov1alpha1.Repository {
+	return &terrakojoiov1alpha1.Repository{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      repoName,
+			Namespace: namespace,
+		},
+		Spec: terrakojoiov1alpha1.RepositorySpec{
+			Owner:         owner,
+			Name:          repoName,
+			Type:          "github",
+			DefaultBranch: defaultBranchName,
+			GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
+				Name: "dummy",
+			},
+		},
+	}
+}
+
+func repoForBranch(branch *terrakojoiov1alpha1.Branch) *terrakojoiov1alpha1.Repository {
+	return newBranchRepository(branch.Namespace, branch.Spec.Owner, branch.Spec.Repository)
+}
+
+func repositoryOwnerReference(repoName string, repoUID types.UID) metav1.OwnerReference {
+	controller := true
+	blockOwnerDeletion := true
+	return metav1.OwnerReference{
+		APIVersion:         terrakojoiov1alpha1.GroupVersion.String(),
+		Kind:               "Repository",
+		Name:               repoName,
+		UID:                repoUID,
+		Controller:         &controller,
+		BlockOwnerDeletion: &blockOwnerDeletion,
+	}
+}
+
+func attachRepositoryOwnerReference(branch *terrakojoiov1alpha1.Branch, repo *terrakojoiov1alpha1.Repository) {
+	branch.OwnerReferences = []metav1.OwnerReference{
+		repositoryOwnerReference(repo.Name, repo.UID),
+	}
 }
 
 func newBranchTestScheme() *runtime.Scheme {
@@ -82,6 +125,9 @@ func newErrorTestBranch() *terrakojoiov1alpha1.Branch {
 			Name:       "branch-error-test",
 			Namespace:  "default",
 			Finalizers: []string{branchFinalizer},
+			OwnerReferences: []metav1.OwnerReference{
+				repositoryOwnerReference("repo", ""),
+			},
 		},
 		Spec: terrakojoiov1alpha1.BranchSpec{
 			Repository: "repo",
@@ -116,20 +162,6 @@ func (c *deleteWorkflowErrorClient) Delete(ctx context.Context, obj client.Objec
 		return c.err
 	}
 	return c.Client.Delete(ctx, obj, opts...)
-}
-
-type listRepositoryErrorClient struct {
-	client.Client
-	err error
-}
-
-func (c *listRepositoryErrorClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	switch list.(type) {
-	case *terrakojoiov1alpha1.RepositoryList:
-		return c.err
-	default:
-		return c.Client.List(ctx, list, opts...)
-	}
 }
 
 type workflowListSequenceClient struct {
@@ -176,18 +208,6 @@ func (c *statusErrorClient) Status() client.SubResourceWriter {
 
 func (w *statusErrorWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 	return w.err
-}
-
-type repositoryGetErrorClient struct {
-	client.Client
-	err error
-}
-
-func (c *repositoryGetErrorClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if _, ok := obj.(*terrakojoiov1alpha1.Repository); ok {
-		return c.err
-	}
-	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 var _ = Describe("Branch Controller", func() {
@@ -247,6 +267,8 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-finalizer")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      branchName,
@@ -262,6 +284,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			key := client.ObjectKeyFromObject(branch)
@@ -280,6 +303,8 @@ var _ = Describe("Branch Controller", func() {
 			workflowName := uniqueName("workflow-remains")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      branchName,
@@ -298,6 +323,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			createdBranch := &terrakojoiov1alpha1.Branch{}
@@ -339,6 +365,8 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-delete-clean")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      branchName,
@@ -357,6 +385,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "abcdef0123456789abcdef0123456789abcdef01",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, branch)).To(Succeed())
 
@@ -366,45 +395,30 @@ var _ = Describe("Branch Controller", func() {
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
 		})
 
-		It("deletes branch when all workflows completed", func() {
+		It("keeps non-default branch when all workflows completed", func() {
 			ctx := context.Background()
 			namespace := createTestNamespace(ctx)
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
-			repoResourceName := uniqueName("repo-cleanup")
 			branchName := uniqueName("branch-completed")
 			workflowName := uniqueName("workflow-completed")
 			branchRef := "feature/completed"
 			repo := &terrakojoiov1alpha1.Repository{
 				ObjectMeta: ctrl.ObjectMeta{
-					Name:      repoResourceName,
+					Name:      repoName,
 					Namespace: namespace,
-					Labels: map[string]string{
-						"terrakojo.io/owner":     owner,
-						"terrakojo.io/repo-name": repoName,
-					},
 				},
 				Spec: terrakojoiov1alpha1.RepositorySpec{
 					Owner:         owner,
 					Name:          repoName,
 					Type:          "github",
-					DefaultBranch: "main",
+					DefaultBranch: defaultBranchName,
 					GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
 						Name: "dummy",
 					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
-
-			createdRepo := &terrakojoiov1alpha1.Repository{}
-			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(repo), createdRepo)).To(Succeed())
-			createdRepo.Status.BranchList = []terrakojoiov1alpha1.BranchInfo{
-				{
-					Ref: branchRef,
-					SHA: "0123456789abcdef0123456789abcdef01234567",
-				},
-			}
-			Expect(k8sClient.Status().Update(ctx, createdRepo)).To(Succeed())
 
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
@@ -424,6 +438,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			createdBranch := &terrakojoiov1alpha1.Branch{}
@@ -451,15 +466,9 @@ var _ = Describe("Branch Controller", func() {
 			createdWorkflow.Status.Phase = string(WorkflowPhaseSucceeded)
 			Expect(k8sClient.Status().Update(ctx, createdWorkflow)).To(Succeed())
 
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), &terrakojoiov1alpha1.Branch{})
-				return apierrors.IsNotFound(err)
-			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
-
 			Eventually(func(g Gomega) {
-				fetchedRepo := &terrakojoiov1alpha1.Repository{}
-				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(repo), fetchedRepo)).To(Succeed())
-				g.Expect(fetchedRepo.Status.BranchList).To(BeEmpty())
+				fetched := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetched)).To(Succeed())
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 
@@ -482,6 +491,8 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-workflow")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			tfTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      tfTemplateName,
@@ -536,6 +547,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			Eventually(func(g Gomega) {
@@ -593,6 +605,8 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-recreate-workflow")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      templateName,
@@ -629,6 +643,7 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234568",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			Eventually(getChangedFilesCalled.Load).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
@@ -660,6 +675,117 @@ var _ = Describe("Branch Controller", func() {
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 
+		It("recreates workflows when SHA changes after completion", func() {
+			var getChangedFilesCalled atomic.Bool
+			ghManager.GetClientForBranchFunc = func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+						getChangedFilesCalled.Store(true)
+						return []string{"infrastructure/app/main.tf"}, nil
+					},
+				}, nil
+			}
+
+			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			templateName := uniqueName("tf-workflow-template-completed")
+			branchName := uniqueName("branch-recreate-completed")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
+			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      templateName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "tf-test",
+					Match: terrakojoiov1alpha1.WorkflowMatch{
+						Paths: []string{"infrastructure/**/*.tf"},
+					},
+					Steps: []terrakojoiov1alpha1.WorkflowStep{
+						{
+							Name:    "plan",
+							Image:   "hashicorp/terraform:latest",
+							Command: []string{"echo", "Planning..."},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
+
+			oldSHA := "0123456789abcdef0123456789abcdef01234567"
+			newSHA := "0123456789abcdef0123456789abcdef01234568"
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      branchName,
+					Namespace: namespace,
+					Annotations: map[string]string{
+						"terrakojo.io/last-sha": oldSHA,
+					},
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Repository: repoName,
+					Owner:      owner,
+					Name:       "feature/recreate-completed",
+					SHA:        oldSHA,
+				},
+			}
+			attachRepositoryOwnerReference(branch, repo)
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+
+			createdBranch := &terrakojoiov1alpha1.Branch{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), createdBranch)).To(Succeed())
+
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      uniqueName("workflow-completed"),
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      createdBranch.Spec.Owner,
+					Repository: createdBranch.Spec.Repository,
+					Branch:     createdBranch.Name,
+					SHA:        oldSHA,
+					Template:   templateName,
+					Path:       "infrastructure/app",
+				},
+			}
+			Expect(controllerutil.SetControllerReference(createdBranch, workflow, mgr.GetScheme())).To(Succeed())
+			Expect(k8sClient.Create(ctx, workflow)).To(Succeed())
+
+			createdWorkflow := &terrakojoiov1alpha1.Workflow{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workflow), createdWorkflow)).To(Succeed())
+			createdWorkflow.Status.Phase = string(WorkflowPhaseSucceeded)
+			Expect(k8sClient.Status().Update(ctx, createdWorkflow)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				fetched := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetched)).To(Succeed())
+				fetched.Spec.SHA = newSHA
+				g.Expect(k8sClient.Update(ctx, fetched)).To(Succeed())
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+
+			Eventually(getChangedFilesCalled.Load).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
+
+			Eventually(func(g Gomega) {
+				fetchedBranch := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetchedBranch)).To(Succeed())
+				g.Expect(fetchedBranch.Annotations).To(HaveKeyWithValue("terrakojo.io/last-sha", newSHA))
+
+				workflowList := &terrakojoiov1alpha1.WorkflowList{}
+				g.Expect(k8sClient.List(
+					ctx,
+					workflowList,
+					client.InNamespace(namespace),
+					client.MatchingLabels{"terrakojo.io/owner-uid": string(fetchedBranch.UID)},
+				)).To(Succeed())
+				g.Expect(workflowList.Items).To(HaveLen(1))
+				g.Expect(workflowList.Items[0].Spec.SHA).To(Equal(newSHA))
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+		})
+
 		It("uses PR changed files API when PRNumber is set", func() {
 			var prCalled atomic.Bool
 			var commitCalled atomic.Bool
@@ -681,6 +807,8 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-pr")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      branchName,
@@ -694,16 +822,18 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
 			Eventually(prCalled.Load).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
 			Expect(commitCalled.Load()).To(BeFalse())
 
-			Eventually(func() bool {
+			Eventually(func(g Gomega) {
 				key := client.ObjectKeyFromObject(branch)
-				err := k8sClient.Get(ctx, key, &terrakojoiov1alpha1.Branch{})
-				return apierrors.IsNotFound(err)
-			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
+				fetched := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, key, fetched)).To(Succeed())
+				g.Expect(fetched.Annotations).To(HaveKeyWithValue("terrakojo.io/last-sha", branch.Spec.SHA))
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 
 		It("no matching WorkflowTemplates results in no Workflows created", func() {
@@ -721,6 +851,8 @@ var _ = Describe("Branch Controller", func() {
 			branchName := uniqueName("branch-no-workflow")
 			owner := uniqueName("owner")
 			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
 			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: ctrl.ObjectMeta{
 					Name:      templateName,
@@ -754,12 +886,14 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
+			attachRepositoryOwnerReference(branch, repo)
 			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
 
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), &terrakojoiov1alpha1.Branch{})
-				return apierrors.IsNotFound(err)
-			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(BeTrue())
+			Eventually(func(g Gomega) {
+				fetched := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetched)).To(Succeed())
+				g.Expect(fetched.Annotations).To(HaveKeyWithValue("terrakojo.io/last-sha", branch.Spec.SHA))
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 	})
 
@@ -786,7 +920,8 @@ var _ = Describe("Branch Controller", func() {
 					},
 				},
 			}
-			fakeClient := newBranchFakeClient(testScheme, branch, template)
+			repo := repoForBranch(branch)
+			fakeClient := newBranchFakeClient(testScheme, branch, repo, template)
 			ghManager := &fakeGitHubClientManager{
 				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 					return &fakeGitHubClient{
@@ -833,7 +968,8 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when listing workflows errors", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				baseClient := newBranchFakeClient(testScheme, branch)
+				repo := repoForBranch(branch)
+				baseClient := newBranchFakeClient(testScheme, branch, repo)
 				reconciler := &BranchReconciler{
 					Client:              &listErrorClient{Client: baseClient, err: fmt.Errorf("list failed")},
 					Scheme:              testScheme,
@@ -844,7 +980,8 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when GitHubClientManager is nil", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				client := newBranchFakeClient(testScheme, branch)
+				repo := repoForBranch(branch)
+				client := newBranchFakeClient(testScheme, branch, repo)
 				reconciler := &BranchReconciler{
 					Client:              client,
 					Scheme:              testScheme,
@@ -855,7 +992,8 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when GetClientForBranch returns error", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				client := newBranchFakeClient(testScheme, branch)
+				repo := repoForBranch(branch)
+				client := newBranchFakeClient(testScheme, branch, repo)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return nil, fmt.Errorf("gh client error")
@@ -871,7 +1009,8 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when commit changed files returns error", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				client := newBranchFakeClient(testScheme, branch)
+				repo := repoForBranch(branch)
+				client := newBranchFakeClient(testScheme, branch, repo)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -891,7 +1030,8 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when listing workflow templates returns error", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				baseClient := newBranchFakeClient(testScheme, branch)
+				repo := repoForBranch(branch)
+				baseClient := newBranchFakeClient(testScheme, branch, repo)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -974,66 +1114,12 @@ var _ = Describe("Branch Controller", func() {
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "remove finalizer update failed"),
-			Entry("fails when cleanup repository status errors for completed branch", func() setupResult {
-				testScheme := newBranchTestScheme()
-				branch := newErrorTestBranch()
-				branch.UID = types.UID("branch-completed-error")
-				workflow := &terrakojoiov1alpha1.Workflow{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "workflow-completed-error",
-						Namespace: branch.Namespace,
-					},
-					Spec: terrakojoiov1alpha1.WorkflowSpec{
-						Owner:      branch.Spec.Owner,
-						Repository: branch.Spec.Repository,
-						Branch:     branch.Name,
-						SHA:        branch.Spec.SHA,
-						Template:   "template",
-					},
-					Status: terrakojoiov1alpha1.WorkflowStatus{
-						Phase: string(WorkflowPhaseSucceeded),
-					},
-				}
-				Expect(controllerutil.SetControllerReference(branch, workflow, testScheme)).To(Succeed())
-				baseClient := newBranchFakeClient(testScheme, branch, workflow)
-				reconciler := &BranchReconciler{
-					Client:              &listRepositoryErrorClient{Client: baseClient, err: fmt.Errorf("list repos failed")},
-					Scheme:              testScheme,
-					GitHubClientManager: &fakeGitHubClientManager{},
-				}
-				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
-			}, "list repos failed"),
 			Entry("fails when deleting completed branch", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.UID = types.UID("branch-completed-delete")
-				repo := &terrakojoiov1alpha1.Repository{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "repo-completed-delete",
-						Namespace: branch.Namespace,
-						Labels: map[string]string{
-							"terrakojo.io/owner":     branch.Spec.Owner,
-							"terrakojo.io/repo-name": branch.Spec.Repository,
-						},
-					},
-					Spec: terrakojoiov1alpha1.RepositorySpec{
-						Owner:         branch.Spec.Owner,
-						Name:          branch.Spec.Repository,
-						Type:          "github",
-						DefaultBranch: "main",
-						GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
-							Name: "dummy",
-						},
-					},
-					Status: terrakojoiov1alpha1.RepositoryStatus{
-						BranchList: []terrakojoiov1alpha1.BranchInfo{
-							{
-								Ref: branch.Spec.Name,
-								SHA: branch.Spec.SHA,
-							},
-						},
-					},
-				}
+				branch.Spec.Name = defaultBranchName
+				repo := repoForBranch(branch)
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "workflow-completed-delete",
@@ -1067,6 +1153,7 @@ var _ = Describe("Branch Controller", func() {
 				}
 				branch.Spec.SHA = "0123456789abcdef0123456789abcdef01234568"
 				branch.UID = types.UID("branch-sha-change")
+				repo := repoForBranch(branch)
 				workflow := &terrakojoiov1alpha1.Workflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "workflow-sha-change",
@@ -1081,7 +1168,7 @@ var _ = Describe("Branch Controller", func() {
 					},
 				}
 				Expect(controllerutil.SetControllerReference(branch, workflow, testScheme)).To(Succeed())
-				baseClient := newBranchFakeClient(testScheme, branch, workflow)
+				baseClient := newBranchFakeClient(testScheme, branch, repo, workflow)
 				reconciler := &BranchReconciler{
 					Client:              &deleteWorkflowErrorClient{Client: baseClient, err: fmt.Errorf("delete workflow error")},
 					Scheme:              testScheme,
@@ -1093,7 +1180,8 @@ var _ = Describe("Branch Controller", func() {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
 				branch.Spec.PRNumber = 7
-				client := newBranchFakeClient(testScheme, branch)
+				repo := repoForBranch(branch)
+				client := newBranchFakeClient(testScheme, branch, repo)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1110,56 +1198,11 @@ var _ = Describe("Branch Controller", func() {
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "pr changed files error"),
-			Entry("fails when cleanup repository status errors with no changed files", func() setupResult {
-				testScheme := newBranchTestScheme()
-				branch := newErrorTestBranch()
-				client := newBranchFakeClient(testScheme, branch)
-				ghManager := &fakeGitHubClientManager{
-					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
-						return &fakeGitHubClient{
-							GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
-								return []string{}, nil
-							},
-						}, nil
-					},
-				}
-				reconciler := &BranchReconciler{
-					Client:              &listRepositoryErrorClient{Client: client, err: fmt.Errorf("list repos failed")},
-					Scheme:              testScheme,
-					GitHubClientManager: ghManager,
-				}
-				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
-			}, "list repos failed"),
 			Entry("fails when deleting branch with no changed files", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				repo := &terrakojoiov1alpha1.Repository{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "repo-no-changes",
-						Namespace: branch.Namespace,
-						Labels: map[string]string{
-							"terrakojo.io/owner":     branch.Spec.Owner,
-							"terrakojo.io/repo-name": branch.Spec.Repository,
-						},
-					},
-					Spec: terrakojoiov1alpha1.RepositorySpec{
-						Owner:         branch.Spec.Owner,
-						Name:          branch.Spec.Repository,
-						Type:          "github",
-						DefaultBranch: "main",
-						GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
-							Name: "dummy",
-						},
-					},
-					Status: terrakojoiov1alpha1.RepositoryStatus{
-						BranchList: []terrakojoiov1alpha1.BranchInfo{
-							{
-								Ref: branch.Spec.Name,
-								SHA: branch.Spec.SHA,
-							},
-						},
-					},
-				}
+				branch.Spec.Name = defaultBranchName
+				repo := repoForBranch(branch)
 				baseClient := newBranchFakeClient(testScheme, branch, repo)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
@@ -1177,75 +1220,11 @@ var _ = Describe("Branch Controller", func() {
 				}
 				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
 			}, "delete branch failed"),
-			Entry("fails when cleanup repository status errors with no matching templates", func() setupResult {
-				testScheme := newBranchTestScheme()
-				branch := newErrorTestBranch()
-				template := &terrakojoiov1alpha1.WorkflowTemplate{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "template-no-match",
-						Namespace: branch.Namespace,
-					},
-					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
-						DisplayName: "no-match",
-						Match: terrakojoiov1alpha1.WorkflowMatch{
-							Paths: []string{"infrastructure/**/*.tf"},
-						},
-						Steps: []terrakojoiov1alpha1.WorkflowStep{
-							{
-								Name:    "plan",
-								Image:   "hashicorp/terraform:latest",
-								Command: []string{"echo", "Planning..."},
-							},
-						},
-					},
-				}
-				client := newBranchFakeClient(testScheme, branch, template)
-				ghManager := &fakeGitHubClientManager{
-					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
-						return &fakeGitHubClient{
-							GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
-								return []string{"docs/readme.md"}, nil
-							},
-						}, nil
-					},
-				}
-				reconciler := &BranchReconciler{
-					Client:              &listRepositoryErrorClient{Client: client, err: fmt.Errorf("list repos failed")},
-					Scheme:              testScheme,
-					GitHubClientManager: ghManager,
-				}
-				return setupResult{reconciler: reconciler, request: makeRequest(branch)}
-			}, "list repos failed"),
 			Entry("fails when deleting branch with no matching templates", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
-				repo := &terrakojoiov1alpha1.Repository{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "repo-no-match-delete",
-						Namespace: branch.Namespace,
-						Labels: map[string]string{
-							"terrakojo.io/owner":     branch.Spec.Owner,
-							"terrakojo.io/repo-name": branch.Spec.Repository,
-						},
-					},
-					Spec: terrakojoiov1alpha1.RepositorySpec{
-						Owner:         branch.Spec.Owner,
-						Name:          branch.Spec.Repository,
-						Type:          "github",
-						DefaultBranch: "main",
-						GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
-							Name: "dummy",
-						},
-					},
-					Status: terrakojoiov1alpha1.RepositoryStatus{
-						BranchList: []terrakojoiov1alpha1.BranchInfo{
-							{
-								Ref: branch.Spec.Name,
-								SHA: branch.Spec.SHA,
-							},
-						},
-					},
-				}
+				branch.Spec.Name = defaultBranchName
+				repo := repoForBranch(branch)
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "template-no-match-delete",
@@ -1285,6 +1264,7 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when create workflow returns error", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
+				repo := repoForBranch(branch)
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "template-create-error",
@@ -1304,7 +1284,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(testScheme, branch, template)
+				baseClient := newBranchFakeClient(testScheme, branch, repo, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1324,6 +1304,7 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when updating branch annotations returns error", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
+				repo := repoForBranch(branch)
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "template-update-error",
@@ -1343,7 +1324,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(testScheme, branch, template)
+				baseClient := newBranchFakeClient(testScheme, branch, repo, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1363,6 +1344,7 @@ var _ = Describe("Branch Controller", func() {
 			Entry("fails when updating branch status returns error", func() setupResult {
 				testScheme := newBranchTestScheme()
 				branch := newErrorTestBranch()
+				repo := repoForBranch(branch)
 				template := &terrakojoiov1alpha1.WorkflowTemplate{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      "template-status-error",
@@ -1382,7 +1364,7 @@ var _ = Describe("Branch Controller", func() {
 						},
 					},
 				}
-				baseClient := newBranchFakeClient(testScheme, branch, template)
+				baseClient := newBranchFakeClient(testScheme, branch, repo, template)
 				ghManager := &fakeGitHubClientManager{
 					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
 						return &fakeGitHubClient{
@@ -1493,187 +1475,6 @@ var _ = Describe("Branch Controller", func() {
 			}
 			_, err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow", "path")
 			Expect(err).To(HaveOccurred())
-		})
-
-		It("cleans up default branch commits when workflow is completed", func() {
-			ctx := context.Background()
-			namespace := createTestNamespace(ctx)
-			owner := uniqueName("owner")
-			repoName := uniqueName("repo-default-cleanup")
-			reconciler := &BranchReconciler{
-				Client: k8sClient,
-				Scheme: scheme.Scheme,
-			}
-
-			repo := &terrakojoiov1alpha1.Repository{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      repoName,
-					Namespace: namespace,
-					Labels: map[string]string{
-						"terrakojo.io/owner":     owner,
-						"terrakojo.io/repo-name": repoName,
-					},
-				},
-				Spec: terrakojoiov1alpha1.RepositorySpec{
-					Owner:         owner,
-					Name:          repoName,
-					Type:          "github",
-					DefaultBranch: "main",
-					GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
-						Name: "dummy",
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
-
-			updatedRepo := &terrakojoiov1alpha1.Repository{}
-			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(repo), updatedRepo)).To(Succeed())
-			updatedRepo.Status.DefaultBranchCommits = []terrakojoiov1alpha1.BranchInfo{
-				{
-					Ref: "main",
-					SHA: "0123456789abcdef0123456789abcdef01234567",
-				},
-				{
-					Ref: "main",
-					SHA: "abcdef0123456789abcdef0123456789abcdef01",
-				},
-			}
-			Expect(k8sClient.Status().Update(ctx, updatedRepo)).To(Succeed())
-
-			branch := &terrakojoiov1alpha1.Branch{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "branch-default",
-					Namespace: namespace,
-				},
-				Spec: terrakojoiov1alpha1.BranchSpec{
-					Owner:      owner,
-					Repository: repoName,
-					Name:       "main",
-					SHA:        "0123456789abcdef0123456789abcdef01234567",
-				},
-			}
-
-			Expect(reconciler.cleanupRepositoryStatus(ctx, branch)).To(Succeed())
-
-			Eventually(func(g Gomega) {
-				fetched := &terrakojoiov1alpha1.Repository{}
-				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(repo), fetched)).To(Succeed())
-				g.Expect(fetched.Status.DefaultBranchCommits).To(HaveLen(1))
-				g.Expect(fetched.Status.DefaultBranchCommits[0].SHA).To(Equal("abcdef0123456789abcdef0123456789abcdef01"))
-			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
-		})
-
-		It("cleanupRepositoryStatus returns error when re-fetching repository fails", func() {
-			testScheme := newBranchTestScheme()
-			branch := newErrorTestBranch()
-			repo := &terrakojoiov1alpha1.Repository{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "repo-refetch-error",
-					Namespace: branch.Namespace,
-					Labels: map[string]string{
-						"terrakojo.io/owner":     branch.Spec.Owner,
-						"terrakojo.io/repo-name": branch.Spec.Repository,
-					},
-				},
-				Spec: terrakojoiov1alpha1.RepositorySpec{
-					Owner:         branch.Spec.Owner,
-					Name:          branch.Spec.Repository,
-					Type:          "github",
-					DefaultBranch: "main",
-					GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
-						Name: "dummy",
-					},
-				},
-			}
-			baseClient := newBranchFakeClient(testScheme, repo)
-			reconciler := &BranchReconciler{
-				Client: &repositoryGetErrorClient{
-					Client: baseClient,
-					err:    fmt.Errorf("get repo failed"),
-				},
-				Scheme: testScheme,
-			}
-			err := reconciler.cleanupRepositoryStatus(context.Background(), branch)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("re-fetch repository"))
-		})
-
-		It("cleanupRepositoryStatus returns nil when nothing changed", func() {
-			testScheme := newBranchTestScheme()
-			branch := newErrorTestBranch()
-			repo := &terrakojoiov1alpha1.Repository{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "repo-no-change",
-					Namespace: branch.Namespace,
-					Labels: map[string]string{
-						"terrakojo.io/owner":     branch.Spec.Owner,
-						"terrakojo.io/repo-name": branch.Spec.Repository,
-					},
-				},
-				Spec: terrakojoiov1alpha1.RepositorySpec{
-					Owner:         branch.Spec.Owner,
-					Name:          branch.Spec.Repository,
-					Type:          "github",
-					DefaultBranch: "main",
-					GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
-						Name: "dummy",
-					},
-				},
-				Status: terrakojoiov1alpha1.RepositoryStatus{
-					BranchList: []terrakojoiov1alpha1.BranchInfo{
-						{
-							Ref: "other-branch",
-							SHA: "abcdef0123456789abcdef0123456789abcdef01",
-						},
-					},
-				},
-			}
-			reconciler := &BranchReconciler{
-				Client: newBranchFakeClient(testScheme, repo),
-				Scheme: testScheme,
-			}
-			err := reconciler.cleanupRepositoryStatus(context.Background(), branch)
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("cleanupRepositoryStatus returns error when status update fails", func() {
-			testScheme := newBranchTestScheme()
-			branch := newErrorTestBranch()
-			repo := &terrakojoiov1alpha1.Repository{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "repo-status-error",
-					Namespace: branch.Namespace,
-					Labels: map[string]string{
-						"terrakojo.io/owner":     branch.Spec.Owner,
-						"terrakojo.io/repo-name": branch.Spec.Repository,
-					},
-				},
-				Spec: terrakojoiov1alpha1.RepositorySpec{
-					Owner:         branch.Spec.Owner,
-					Name:          branch.Spec.Repository,
-					Type:          "github",
-					DefaultBranch: "main",
-					GitHubSecretRef: terrakojoiov1alpha1.GitHubSecretRef{
-						Name: "dummy",
-					},
-				},
-				Status: terrakojoiov1alpha1.RepositoryStatus{
-					BranchList: []terrakojoiov1alpha1.BranchInfo{
-						{
-							Ref: branch.Spec.Name,
-							SHA: branch.Spec.SHA,
-						},
-					},
-				},
-			}
-			baseClient := newBranchFakeClient(testScheme, repo)
-			reconciler := &BranchReconciler{
-				Client: &statusErrorClient{Client: baseClient, err: fmt.Errorf("status update failed")},
-				Scheme: testScheme,
-			}
-			err := reconciler.cleanupRepositoryStatus(context.Background(), branch)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("status update failed"))
 		})
 	})
 })

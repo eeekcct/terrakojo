@@ -96,16 +96,9 @@ type RepositoryStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// BranchList contains the list of branches associated with this repository
-	// Each branch contains detailed information including commit SHA and PR number
+	// LastDefaultBranchHeadSHA stores the default branch head SHA observed during the last GitHub sync.
 	// +optional
-	BranchList []BranchInfo `json:"branchList,omitempty"`
-
-	// DefaultBranchCommits keeps a queue of commits that have landed on the default branch.
-	// This is used to ensure each merge/push to the default branch gets processed even if multiple
-	// commits arrive while existing jobs are still running.
-	// +optional
-	DefaultBranchCommits []BranchInfo `json:"defaultBranchCommits,omitempty"`
+	LastDefaultBranchHeadSHA string `json:"lastDefaultBranchHeadSha,omitempty"`
 
 	// Synced indicates whether the repository has been successfully synced
 	// +optional

@@ -31,7 +31,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
+	gh "github.com/eeekcct/terrakojo/internal/github"
 	"github.com/eeekcct/terrakojo/internal/kubernetes"
+	"github.com/eeekcct/terrakojo/internal/repository/sync"
 )
 
 // RepositoryReconciler reconciles a Repository object
@@ -42,6 +44,13 @@ type RepositoryReconciler struct {
 }
 
 const repositoryFinalizer = "terrakojo.io/cleanup-branches"
+
+// repositorySyncInterval is the interval at which the controller polls GitHub for changes.
+// Webhooks should be the primary trigger for syncs, so this is kept long to minimize
+// API rate limit usage. The annotation-based sync request from webhooks provides
+// immediate sync when changes occur, but if webhooks are missed or fail, there can be
+// a delay of up to this interval before a repository is synced again.
+const repositorySyncInterval = 30 * time.Minute
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories/status,verbs=get;update;patch
@@ -120,8 +129,6 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		log.Info("Successfully created GitHub client for repository",
 			"owner", repo.Spec.Owner,
 			"secretName", repo.Spec.GitHubSecretRef.Name)
-		// Store client for potential later use
-		_ = ghClient
 	}
 
 	var branchList terrakojoiov1alpha1.BranchList
@@ -141,19 +148,55 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		existingBranches[branch.Spec.Name] = append(existingBranches[branch.Spec.Name], branch)
 	}
 
-	// Sync default branch commits from DefaultBranchCommits queue
-	if err := r.syncDefaultBranchCommits(ctx, &repo, existingBranches); err != nil {
-		log.Error(err, "Failed to sync default branch commits")
+	// Sync branches directly from GitHub data.
+	if err := r.syncFromGitHub(ctx, &repo, ghClient, existingBranches); err != nil {
+		log.Error(err, "Failed to sync branches from GitHub")
 		return ctrl.Result{}, err
 	}
 
-	// Sync non-default branches from BranchList
-	if err := r.syncBranchList(ctx, &repo, existingBranches); err != nil {
-		log.Error(err, "Failed to sync branch list")
-		return ctrl.Result{}, err
+	return ctrl.Result{RequeueAfter: repositorySyncInterval}, nil
+}
+
+func (r *RepositoryReconciler) syncFromGitHub(ctx context.Context, repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface, existingBranches map[string][]terrakojoiov1alpha1.Branch) error {
+	defaultRef := repo.Spec.DefaultBranch
+	defaultHeadSHA, err := sync.FetchDefaultBranchHeadSHA(repo, ghClient)
+	if err != nil {
+		return err
 	}
 
-	return ctrl.Result{}, nil
+	if defaultHeadSHA != "" {
+		commitSHAs, err := sync.CollectDefaultBranchCommits(repo, ghClient, defaultHeadSHA)
+		if err != nil {
+			return err
+		}
+		if err := r.ensureDefaultBranchCommits(ctx, repo, commitSHAs, existingBranches[defaultRef]); err != nil {
+			return err
+		}
+
+		// Update LastDefaultBranchHeadSHA to the last processed commit
+		// When >250 commits exist, this will be the 250th commit, not defaultHeadSHA
+		// Next reconcile will process remaining commits incrementally
+		newLastSHA := defaultHeadSHA
+		if len(commitSHAs) > 0 {
+			newLastSHA = commitSHAs[len(commitSHAs)-1]
+		}
+		if repo.Status.LastDefaultBranchHeadSHA != newLastSHA {
+			repo.Status.LastDefaultBranchHeadSHA = newLastSHA
+			if err := r.Status().Update(ctx, repo); err != nil {
+				return err
+			}
+		}
+	}
+
+	branchHeads, err := sync.FetchBranchHeadsFromGitHub(repo, ghClient)
+	if err != nil {
+		return err
+	}
+	if err := r.syncBranchHeads(ctx, repo, existingBranches, branchHeads); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ensureLabels ensures that the Repository has the required labels for efficient querying
@@ -207,12 +250,49 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 	return false, nil // No update needed, continue with reconcile
 }
 
-// syncBranchList synchronizes BranchList entries (non-default branches) with actual Branch resources
-func (r *RepositoryReconciler) syncBranchList(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
+func (r *RepositoryReconciler) ensureDefaultBranchCommits(ctx context.Context, repo *terrakojoiov1alpha1.Repository, commitSHAs []string, existing []terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// Process desired branches (create or update). BranchList is latest-one-per-ref.
-	for _, branchInfo := range repo.Status.BranchList {
+	if len(commitSHAs) == 0 {
+		return nil
+	}
+
+	existingBySHA := make(map[string]struct{}, len(existing))
+	for _, branch := range existing {
+		if branch.Spec.SHA == "" {
+			continue
+		}
+		existingBySHA[branch.Spec.SHA] = struct{}{}
+	}
+
+	for _, sha := range commitSHAs {
+		if sha == "" {
+			continue
+		}
+		if _, found := existingBySHA[sha]; found {
+			continue
+		}
+		branchInfo := terrakojoiov1alpha1.BranchInfo{
+			Ref: repo.Spec.DefaultBranch,
+			SHA: sha,
+		}
+		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
+			return fmt.Errorf("failed to create branch for default branch commit %s: %w", sha, err)
+		}
+		log.Info("Created Branch for default branch commit", "ref", repo.Spec.DefaultBranch, "sha", sha)
+	}
+
+	return nil
+}
+
+func (r *RepositoryReconciler) syncBranchHeads(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch, desired []terrakojoiov1alpha1.BranchInfo) error {
+	log := logf.FromContext(ctx)
+	defaultRef := repo.Spec.DefaultBranch
+
+	for _, branchInfo := range desired {
+		if branchInfo.Ref == defaultRef {
+			continue
+		}
 		existingForRef := branches[branchInfo.Ref]
 		if err := r.ensureBranchResource(ctx, repo, branchInfo, existingForRef); err != nil {
 			return err
@@ -220,7 +300,9 @@ func (r *RepositoryReconciler) syncBranchList(ctx context.Context, repo *terrako
 		delete(branches, branchInfo.Ref)
 	}
 
-	// Delete branches that are no longer desired (branch removed from status)
+	// Remove default branch from consideration to avoid deleting commit branches.
+	delete(branches, defaultRef)
+
 	for _, staleBranches := range branches {
 		for _, branch := range staleBranches {
 			if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
@@ -233,57 +315,11 @@ func (r *RepositoryReconciler) syncBranchList(ctx context.Context, repo *terrako
 	return nil
 }
 
-// syncDefaultBranchCommits synchronizes Branch resources with DefaultBranchCommits queue on the default branch.
-// Unlike PR branches, we do not delete older Branches for the same ref because each commit should be processed.
-func (r *RepositoryReconciler) syncDefaultBranchCommits(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch) error {
-	log := logf.FromContext(ctx)
-
-	defaultRef := repo.Spec.DefaultBranch
-	existingForRef := branches[defaultRef]
-	existingBySHA := make(map[string]terrakojoiov1alpha1.Branch)
-	for _, branch := range existingForRef {
-		existingBySHA[branch.Spec.SHA] = branch
-	}
-
-	for _, commit := range repo.Status.DefaultBranchCommits {
-		ref := commit.Ref
-		if ref == "" {
-			ref = defaultRef
-		}
-		if _, found := existingBySHA[commit.SHA]; found {
-			delete(existingBySHA, commit.SHA)
-			continue
-		}
-		branchInfo := terrakojoiov1alpha1.BranchInfo{
-			Ref:      ref,
-			PRNumber: commit.PRNumber,
-			SHA:      commit.SHA,
-		}
-		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
-			return fmt.Errorf("failed to create branch for default branch commit %s: %w", commit.SHA, err)
-		}
-		log.Info("Created Branch for default branch commit", "ref", ref, "sha", commit.SHA)
-	}
-
-	// Delete stale default branch Branches (not in DefaultBranchCommits queue)
-	for _, staleBranch := range existingBySHA {
-		if err := r.Delete(ctx, &staleBranch); err != nil && client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete stale default branch commit branch %s: %w", staleBranch.Name, err)
-		}
-		log.Info("Deleted stale Branch resource for default branch commit", "branch", staleBranch.Spec.Name, "sha", staleBranch.Spec.SHA)
-	}
-
-	// Remove default branch from the branches map so syncBranches won't try to delete it
-	delete(branches, defaultRef)
-
-	return nil
-}
-
 // ensureBranchResource creates or updates a Branch resource as needed
 func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchInfo terrakojoiov1alpha1.BranchInfo, existing []terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// Webhook ensures only latest SHA per ref in BranchList, so existing should have at most one entry
+	// GitHub sync ensures only the latest SHA per ref, so existing should have at most one entry.
 	if len(existing) > 0 {
 		current := &existing[0]
 		if current.Spec.SHA == branchInfo.SHA {
