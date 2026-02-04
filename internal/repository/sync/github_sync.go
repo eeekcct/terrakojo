@@ -9,7 +9,10 @@ import (
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	gh "github.com/eeekcct/terrakojo/internal/github"
 	ghapi "github.com/google/go-github/v79/github"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+var syncLog = logf.Log.WithName("repository-sync")
 
 func FetchDefaultBranchHeadSHA(repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface) (string, error) {
 	branch, err := ghClient.GetBranch(repo.Spec.Owner, repo.Spec.Name, repo.Spec.DefaultBranch)
@@ -83,7 +86,17 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 		shas = append(shas, *commit.SHA)
 	}
 	if len(shas) == 0 {
-		return []string{headSHA}, nil
+		// CompareCommits returned successfully but without commits. Only fall back
+		// when the base commit no longer exists; otherwise retry to avoid skipping
+		// intermediate commits when histories diverge.
+		missing, lookupErr := isBaseCommitMissing(repo, ghClient)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if missing {
+			return []string{headSHA}, nil
+		}
+		return nil, fmt.Errorf("github CompareCommits returned no commits between %s and %s", repo.Status.LastDefaultBranchHeadSHA, headSHA)
 	}
 	// When truncated, remaining commits will be processed in next reconcile
 	// after LastDefaultBranchHeadSHA is updated to the last SHA in this batch
@@ -162,6 +175,11 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 			sha = prInfo.sha
 		}
 		if sha == "" {
+			if hasPR {
+				syncLog.Info("Skipping branch ref with missing SHA from GitHub", "ref", ref, "prNumber", prInfo.number)
+			} else {
+				syncLog.Info("Skipping branch ref with missing SHA from GitHub", "ref", ref)
+			}
 			continue
 		}
 		entry := terrakojoiov1alpha1.BranchInfo{

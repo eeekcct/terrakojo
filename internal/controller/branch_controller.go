@@ -123,32 +123,46 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	lastSHA := branch.Annotations["terrakojo.io/last-sha"]
 
-	// If all workflows owned by this branch are completed, optionally delete the Branch.
+	// List workflows owned by this branch to decide whether to keep or delete.
 	workflows, err := r.listWorkflowsForBranch(ctx, &branch)
 	if err != nil {
 		log.Error(err, "Failed to list workflows for branch")
 		return ctrl.Result{}, err
 	}
-	if len(workflows) > 0 && allWorkflowsCompleted(workflows) && lastSHA == branch.Spec.SHA {
-		if isDefaultBranch {
-			if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
-				log.Error(err, "Failed to delete completed branch")
-				return ctrl.Result{}, err
-			}
-			log.Info("Deleted Branch after all workflows completed",
-				"branchName", branch.Spec.Name,
-				"sha", branch.Spec.SHA)
-		} else {
-			log.Info("All workflows completed; keeping Branch",
-				"branchName", branch.Spec.Name,
-				"sha", branch.Spec.SHA)
-		}
-		return ctrl.Result{}, nil
-	}
 
-	// Check if the SHA has changed since last reconcile
+	// If the SHA hasn't changed, either delete (default branch) or keep based on workflows.
 	if lastSHA == branch.Spec.SHA {
-		// No changes in SHA, nothing to do
+		if len(workflows) == 0 {
+			if isDefaultBranch {
+				if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
+					log.Error(err, "Failed to delete branch with no workflows")
+					return ctrl.Result{}, err
+				}
+				log.Info("Deleted Branch for default branch commit with no workflows",
+					"branchName", branch.Spec.Name,
+					"sha", branch.Spec.SHA)
+			}
+			return ctrl.Result{}, nil
+		}
+
+		if allWorkflowsCompleted(workflows) {
+			if isDefaultBranch {
+				if err := r.Delete(ctx, &branch); err != nil && client.IgnoreNotFound(err) != nil {
+					log.Error(err, "Failed to delete completed branch")
+					return ctrl.Result{}, err
+				}
+				log.Info("Deleted Branch after all workflows completed",
+					"branchName", branch.Spec.Name,
+					"sha", branch.Spec.SHA)
+			} else {
+				log.Info("All workflows completed; keeping Branch",
+					"branchName", branch.Spec.Name,
+					"sha", branch.Spec.SHA)
+			}
+			return ctrl.Result{}, nil
+		}
+
+		// Workflows still running; nothing to do.
 		return ctrl.Result{}, nil
 	}
 

@@ -244,9 +244,14 @@ func (c *Client) CompareCommits(owner, repo, base, head string) (*CompareResult,
 		totalCommits = *comparison.TotalCommits
 	}
 
-	// Truncation is detected when we receive the maximum page size (250)
-	// This handles both exactly 250 commits and >250 commits cases
-	truncated := len(comparison.Commits) >= 250
+	// Determine if the result set is truncated. Prefer TotalCommits when available;
+	// otherwise fall back to a page-size heuristic.
+	truncated := false
+	if comparison.TotalCommits != nil {
+		truncated = len(comparison.Commits) < *comparison.TotalCommits
+	} else {
+		truncated = len(comparison.Commits) == 250
+	}
 
 	return &CompareResult{
 		Commits:      comparison.Commits,

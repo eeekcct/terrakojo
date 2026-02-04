@@ -155,6 +155,49 @@ func TestCollectDefaultBranchCommitsReturnsErrorOnCompareFailureWithExistingBase
 	require.ErrorContains(t, err, "compare failed")
 }
 
+func TestCollectDefaultBranchCommitsFallsBackOnEmptyCompareWithMissingBase(t *testing.T) {
+	repo := newTestRepository("repo-compare-empty-missing-base", types.UID("repo-compare-empty-missing-base-uid"))
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
+	ghClient := &fakeGitHubClient{
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
+			return &gh.CompareResult{
+				Commits:      []*ghapi.RepositoryCommit{},
+				TotalCommits: 0,
+				Truncated:    false,
+			}, nil
+		},
+		GetCommitFunc: func(owner, repoName, sha string) (*ghapi.RepositoryCommit, error) {
+			return nil, &ghapi.ErrorResponse{Response: &http.Response{StatusCode: http.StatusNotFound}}
+		},
+	}
+
+	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
+	require.NoError(t, err)
+	require.Equal(t, []string{"head"}, shas)
+}
+
+func TestCollectDefaultBranchCommitsReturnsErrorOnEmptyCompareWithExistingBase(t *testing.T) {
+	repo := newTestRepository("repo-compare-empty-base-exists", types.UID("repo-compare-empty-base-exists-uid"))
+	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
+	ghClient := &fakeGitHubClient{
+		CompareCommitsFunc: func(owner, repoName, base, head string) (*gh.CompareResult, error) {
+			return &gh.CompareResult{
+				Commits:      []*ghapi.RepositoryCommit{},
+				TotalCommits: 0,
+				Truncated:    false,
+			}, nil
+		},
+		GetCommitFunc: func(owner, repoName, sha string) (*ghapi.RepositoryCommit, error) {
+			return &ghapi.RepositoryCommit{}, nil
+		},
+	}
+
+	shas, err := CollectDefaultBranchCommits(repo, ghClient, "head")
+	require.Error(t, err)
+	require.Nil(t, shas)
+	require.ErrorContains(t, err, "returned no commits")
+}
+
 func TestCollectDefaultBranchCommitsHandlesLargeCommitRange(t *testing.T) {
 	repo := newTestRepository("repo-large", types.UID("repo-large-uid"))
 	repo.Status.LastDefaultBranchHeadSHA = testBaseSHA
