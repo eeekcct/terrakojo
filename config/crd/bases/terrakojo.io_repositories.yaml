@@ -14,7 +14,29 @@ spec:
     singular: repository
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .spec.name
+      name: Repo
+      type: string
+    - jsonPath: .spec.type
+      name: Type
+      priority: 1
+      type: string
+    - jsonPath: .spec.defaultBranch
+      name: Default
+      priority: 1
+      type: string
+    - jsonPath: .status.synced
+      name: Synced
+      priority: 1
+      type: boolean
+    - jsonPath: .status.lastDefaultBranchHeadSha
+      name: LastHead
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Repository is the Schema for the repositories API

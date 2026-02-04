@@ -14,7 +14,14 @@ spec:
     singular: workflowtemplate
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.displayName
+      name: DisplayName
+      type: string
+    - jsonPath: .spec.match.paths
+      name: Paths
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: WorkflowTemplate is the Schema for the workflowtemplates API

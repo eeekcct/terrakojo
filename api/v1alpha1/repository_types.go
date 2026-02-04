@@ -107,6 +107,12 @@ type RepositoryStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Owner",type=string,JSONPath=`.spec.owner`
+// +kubebuilder:printcolumn:name="Repo",type=string,JSONPath=`.spec.name`
+// +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`,priority=1
+// +kubebuilder:printcolumn:name="Default",type=string,JSONPath=`.spec.defaultBranch`,priority=1
+// +kubebuilder:printcolumn:name="Synced",type=boolean,JSONPath=`.status.synced`,priority=1
+// +kubebuilder:printcolumn:name="LastHead",type=string,JSONPath=`.status.lastDefaultBranchHeadSha`
 
 // Repository is the Schema for the repositories API
 type Repository struct {

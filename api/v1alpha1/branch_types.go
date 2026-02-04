@@ -80,6 +80,11 @@ type BranchStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Owner",type=string,JSONPath=`.spec.owner`
+// +kubebuilder:printcolumn:name="Repo",type=string,JSONPath=`.spec.repository`
+// +kubebuilder:printcolumn:name="Ref",type=string,JSONPath=`.spec.name`
+// +kubebuilder:printcolumn:name="SHA",type=string,JSONPath=`.spec.sha`
+// +kubebuilder:printcolumn:name="PR",type=integer,JSONPath=`.spec.prNumber`
 
 // Branch is the Schema for the branches API
 type Branch struct {

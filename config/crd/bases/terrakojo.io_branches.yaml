@@ -14,7 +14,23 @@ spec:
     singular: branch
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.owner
+      name: Owner
+      type: string
+    - jsonPath: .spec.repository
+      name: Repo
+      type: string
+    - jsonPath: .spec.name
+      name: Ref
+      type: string
+    - jsonPath: .spec.sha
+      name: SHA
+      type: string
+    - jsonPath: .spec.prNumber
+      name: PR
+      type: integer
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Branch is the Schema for the branches API
