@@ -93,6 +93,10 @@ type WorkflowStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63",message="metadata.name must be 63 characters or less so derived Job names remain <= 63"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.spec.template`,priority=1
+// +kubebuilder:printcolumn:name="Branch",type=string,JSONPath=`.spec.branch`
+// +kubebuilder:printcolumn:name="SHA",type=string,JSONPath=`.spec.sha`
 
 // Workflow is the Schema for the workflows API
 type Workflow struct {
