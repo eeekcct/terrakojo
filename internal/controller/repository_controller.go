@@ -48,7 +48,8 @@ const repositoryFinalizer = "terrakojo.io/cleanup-branches"
 // repositorySyncInterval is the interval at which the controller polls GitHub for changes.
 // Webhooks should be the primary trigger for syncs, so this is kept long to minimize
 // API rate limit usage. The annotation-based sync request from webhooks provides
-// immediate sync when changes occur.
+// immediate sync when changes occur, but if webhooks are missed or fail, there can be
+// a delay of up to this interval before a repository is synced again.
 const repositorySyncInterval = 30 * time.Minute
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=repositories,verbs=get;list;watch;create;update;patch;delete
