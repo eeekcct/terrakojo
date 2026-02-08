@@ -77,7 +77,9 @@ type WorkflowStatus struct {
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
-	// Jobs contains the list of Job names created for this workflow
+	// Jobs is a legacy/compatibility field.
+	// Current controller logic does not read this field for reconciliation
+	// decisions and does not actively maintain it.
 	// +optional
 	Jobs []string `json:"jobs,omitempty"`
 

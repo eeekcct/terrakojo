@@ -138,7 +138,8 @@ Important log events:
 ## Operational Notes
 - Check Run identity (`status.checkRunID`) is the authoritative link for later updates.
 - Workflow status conflict handling is implemented with `RetryOnConflict`.
-- The controller uses `status.phase` for lifecycle control; `status.jobs` is not used in control decisions.
+- The controller uses `status.phase` for lifecycle control.
+- `status.jobs` is a legacy compatibility field; the controller neither uses it for control decisions nor actively maintains it.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/workflow_controller_test.go`
