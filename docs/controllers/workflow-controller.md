@@ -84,12 +84,12 @@ corresponding GitHub Check Run status/conclusion.
   - `backoffLimit = 0`
   - `restartPolicy = Never`
 - Job pod hardening defaults:
-- `runAsNonRoot=true` (if unset)
-- `runAsUser=1000` (if unset)
-- `seccompProfile=RuntimeDefault` (if unset)
-- container `allowPrivilegeEscalation=false`
-- container drops all capabilities.
-- Container name is normalized to RFC1123-like constraints (lowercase, alnum/hyphen, max 63).
+  - `runAsNonRoot=true` (if unset)
+  - `runAsUser=1000` (if unset)
+  - `seccompProfile=RuntimeDefault` (if unset)
+  - container `allowPrivilegeEscalation=false` (if unset)
+  - container `capabilities.drop=["ALL"]` (if unset or empty)
+- Container names are passed through from `template.spec.job`; Kubernetes Job validation rejects invalid names.
 
 ## Check Run Mapping
 - `Pending` -> `queued` (no conclusion)

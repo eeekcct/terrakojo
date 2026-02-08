@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync/atomic"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -220,6 +219,85 @@ var _ = Describe("Workflow Controller", func() {
 			updated := &terrakojoiov1alpha1.Workflow{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
 			Expect(updated.Status.Phase).To(Equal(string(WorkflowPhaseRunning)))
+		})
+	})
+
+	When("reconciling Workflow resources (envtest)", func() {
+		It("returns an error when template job has an invalid container name", func() {
+			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       uniqueName("workflow-invalid-job"),
+					Namespace:  namespace,
+					Finalizers: []string{workflowFinalizer},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-ref",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template-invalid-job",
+					Path:       "infra/path",
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-ref",
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      workflow.Spec.Owner,
+					Repository: workflow.Spec.Repository,
+					Name:       "feature",
+					SHA:        workflow.Spec.SHA,
+				},
+			}
+			template := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      workflow.Spec.Template,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "Invalid Job Test",
+					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
+					Job:         newTemplateJobSpec("Plan Step", []string{"echo", "hello"}),
+				},
+			}
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+			Expect(k8sClient.Create(ctx, template)).To(Succeed())
+			Expect(k8sClient.Create(ctx, workflow)).To(Succeed())
+
+			DeferCleanup(func() {
+				cleanupCtx := context.Background()
+				current := &terrakojoiov1alpha1.Workflow{}
+				if err := k8sClient.Get(cleanupCtx, client.ObjectKeyFromObject(workflow), current); err == nil {
+					current.Finalizers = nil
+					_ = k8sClient.Update(cleanupCtx, current)
+					_ = k8sClient.Delete(cleanupCtx, current)
+				}
+				_ = k8sClient.Delete(cleanupCtx, template)
+				_ = k8sClient.Delete(cleanupCtx, branch)
+			})
+
+			checkRunID := int64(123)
+			reconciler := &WorkflowReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				GitHubClientManager: &fakeGitHubClientManager{
+					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+						return &fakeGitHubClient{
+							CreateCheckRunFunc: func(owner, repo, sha, name string) (*ghapi.CheckRun, error) {
+								return &ghapi.CheckRun{ID: &checkRunID}, nil
+							},
+						}, nil
+					},
+				},
+			}
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("containers[0].name"))
 		})
 	})
 
@@ -454,7 +532,7 @@ var _ = Describe("Workflow Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"**/*"},
 					},
-					Job: newTemplateJobSpec("Plan Step", []string{"echo", "hello"}),
+					Job: newTemplateJobSpec("plan-step", []string{"echo", "hello"}),
 				},
 			}
 
@@ -1277,19 +1355,7 @@ var _ = Describe("Workflow Controller", func() {
 	})
 
 	When("testing helper methods", func() {
-		DescribeTable("normalizeContainerName", func(input, expected string) {
-			reconciler := &WorkflowReconciler{}
-			Expect(reconciler.normalizeContainerName(input)).To(Equal(expected))
-		},
-			Entry("lowercases and replaces spaces", "Plan Step", "plan-step"),
-			Entry("trims to step when empty", "---", "step"),
-			Entry("keeps alphanumerics", "step1", "step1"),
-			Entry("keeps 63 characters", strings.Repeat("a", 63), strings.Repeat("a", 63)),
-			Entry("truncates over 63 characters", strings.Repeat("a", 70), strings.Repeat("a", 63)),
-			Entry("trims trailing hyphen after truncation", strings.Repeat("a", 62)+"-b", strings.Repeat("a", 62)),
-		)
-
-		It("createJobFromTemplate applies defaults and normalizes container names", func() {
+		It("createJobFromTemplate applies defaults without mutating container names", func() {
 			reconciler := &WorkflowReconciler{}
 			template := &terrakojoiov1alpha1.WorkflowTemplate{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1320,7 +1386,7 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(job.Spec.Template.Spec.SecurityContext.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
 
 			Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
-			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("plan-step"))
+			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("Plan Step"))
 			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext).NotTo(BeNil())
 			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation).NotTo(BeNil())
 			Expect(*job.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation).To(BeFalse())

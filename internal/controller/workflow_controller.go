@@ -19,8 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -358,11 +356,6 @@ func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
 
 	allowPrivilegeEscalation := false
 	for i := range podSpec.Containers {
-		if strings.TrimSpace(podSpec.Containers[i].Name) == "" {
-			podSpec.Containers[i].Name = fmt.Sprintf("container-%d", i+1)
-		}
-		podSpec.Containers[i].Name = r.normalizeContainerName(podSpec.Containers[i].Name)
-
 		if podSpec.Containers[i].SecurityContext == nil {
 			podSpec.Containers[i].SecurityContext = &corev1.SecurityContext{
 				AllowPrivilegeEscalation: &allowPrivilegeEscalation,
@@ -386,44 +379,6 @@ func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
 			podSpec.Containers[i].SecurityContext.Capabilities.Drop = []corev1.Capability{"ALL"}
 		}
 	}
-}
-
-// normalizeContainerName converts a name to a valid Kubernetes container name
-// RFC 1123 compliance: lowercase alphanumeric characters or '-', start and end with alphanumeric
-func (r *WorkflowReconciler) normalizeContainerName(name string) string {
-	const kubeNameMaxLength = 63
-
-	// Convert to lowercase
-	normalized := strings.ToLower(name)
-
-	// Replace spaces and invalid characters with hyphens
-	normalized = regexp.MustCompile(`[^a-z0-9\-]+`).ReplaceAllString(normalized, "-")
-
-	// Remove leading/trailing hyphens
-	normalized = strings.Trim(normalized, "-")
-
-	// Ensure it starts with alphanumeric
-	if len(normalized) == 0 {
-		normalized = "step"
-	} else if !regexp.MustCompile(`^[a-z0-9]`).MatchString(normalized) {
-		normalized = "step-" + normalized
-	}
-
-	// Ensure it ends with alphanumeric
-	if !regexp.MustCompile(`[a-z0-9]$`).MatchString(normalized) {
-		normalized = normalized + "-step"
-	}
-
-	// Ensure it does not exceed Kubernetes name limits
-	if len(normalized) > kubeNameMaxLength {
-		normalized = normalized[:kubeNameMaxLength]
-		normalized = strings.Trim(normalized, "-")
-		if len(normalized) == 0 {
-			normalized = "step"
-		}
-	}
-
-	return normalized
 }
 
 func (r *WorkflowReconciler) determineWorkflowPhase(workflow *terrakojoiov1alpha1.Workflow, job *batchv1.Job) (WorkflowPhase, bool) {
