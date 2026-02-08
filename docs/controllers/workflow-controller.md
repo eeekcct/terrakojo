@@ -1,0 +1,152 @@
+# WorkflowReconciler Specification
+
+Source: `internal/controller/workflow_controller.go`
+
+## Purpose
+`WorkflowReconciler` executes one `Workflow` by coordinating:
+- GitHub Check Runs (`CreateCheckRun` / `UpdateCheckRun`);
+- a Kubernetes `Job` created from `WorkflowTemplate`.
+
+It keeps `Workflow.status.phase` aligned with Job state and updates the
+corresponding GitHub Check Run status/conclusion.
+
+## Watched Resources and Triggers
+- Primary watch: `Workflow` (`For(&Workflow{})`).
+- Owned watch: `Job` (`Owns(&Job{})`).
+- Reconcile triggers:
+- `Workflow` create/update/delete events.
+- owned `Job` events.
+- No fixed periodic requeue in normal path.
+
+## Inputs and Dependencies
+- Workflow spec fields used:
+- `spec.owner`
+- `spec.repository`
+- `spec.branch` (name of `Branch` resource, not Git ref string)
+- `spec.sha`
+- `spec.template`
+- `spec.path`
+- Workflow status fields used:
+- `status.checkRunID`
+- `status.checkRunName`
+- `status.phase`
+- Required dependency:
+- `GitHubClientManager` (`GetClientForBranch` must succeed when branch exists).
+- Required related resources:
+- owning `Branch` referenced by `spec.branch`;
+- `WorkflowTemplate` referenced by `spec.template`.
+- Job convention:
+- Job name equals workflow name.
+
+## Reconciliation Flow
+1. Fetch `Workflow`.
+1. If not found: return without error.
+1. Fetch `Branch` (`spec.branch` in same namespace):
+- branch get error (non-notfound): return error;
+- branch not found: mark `branchNotFound=true`.
+1. Ensure `GitHubClientManager` exists.
+1. If branch exists, build GitHub client for that branch.
+1. Deletion path first:
+- if workflow has no finalizer `terrakojo.io/cleanup-checkrun`, return;
+- when branch exists, run deletion handler:
+  - if `checkRunID == 0`, no-op;
+  - if job is complete or missing, no-op;
+  - else set Check Run to `completed/cancelled`;
+- remove finalizer and update workflow.
+1. Non-deletion path:
+- ensure finalizer exists; if added, return and wait next reconcile.
+- if branch is missing: delete workflow and stop.
+1. Try to fetch Job with same name as workflow.
+1. If Job exists:
+- determine phase from Job status:
+  - `Succeeded > 0` -> `Succeeded`
+  - `Failed > 0` -> `Failed`
+  - `Active > 0` -> `Running`
+  - otherwise -> `Pending`
+- map phase to Check Run status/conclusion and call `UpdateCheckRun`;
+- if phase changed, update workflow status with retry-on-conflict.
+1. If Job does not exist:
+- fetch `WorkflowTemplate`; not found is ignored.
+- build check run name: `<template.displayName>(<workflow.spec.path>)`.
+- create GitHub Check Run (queued).
+- persist `status.checkRunID` and `status.checkRunName` using conflict-retry update.
+- create Job from the first template step only.
+- set workflow as controller owner of the Job.
+- create Job.
+- compute phase for new Job object and update Check Run/status accordingly.
+
+## Job Construction Rules
+- Only `template.spec.steps[0]` is executed.
+- Job pod hardening defaults:
+- `runAsNonRoot=true`
+- `runAsUser=1000`
+- `seccompProfile=RuntimeDefault`
+- container `allowPrivilegeEscalation=false`
+- container drops all capabilities.
+- Container name is normalized to RFC1123-like constraints (lowercase, alnum/hyphen, max 63).
+
+## Check Run Mapping
+- `Pending` -> `queued` (no conclusion)
+- `Running` -> `in_progress` (no conclusion)
+- `Succeeded` -> `completed` + `success`
+- `Failed` -> `completed` + `failure`
+- `Cancelled` -> `completed` + `cancelled`
+
+## State and Idempotency
+- Finalizer ensures best-effort check-run cancellation before workflow deletion.
+- Deterministic Job naming (workflow name) prevents duplicate concurrent jobs for one workflow.
+- Status writes use retry-on-conflict to tolerate concurrent updates.
+- If workflow is deleted between check-run creation and status write, not-found is ignored to avoid reconcile loops.
+
+## Failure Handling
+- Missing `GitHubClientManager`: hard error.
+- Branch lookup failure (non-notfound): hard error.
+- Missing branch in normal path: workflow is deleted (best effort).
+- Check Run create/update failures: hard error.
+- Job create/get failures: hard error.
+- Status update failures: hard error unless explicitly treated as not-found race.
+- Template not found: treated as ignore-notfound (no error return).
+
+## Cleanup and Deletion Semantics
+- Finalizer: `terrakojo.io/cleanup-checkrun`.
+- Deleting workflow with active job:
+- attempts to mark Check Run cancelled before finalizer removal (branch must still be resolvable).
+- If branch is already missing during deletion:
+- cancellation path is skipped because GitHub client cannot be constructed;
+- finalizer is still removed to unblock deletion.
+
+## Observability
+Important log events:
+- `Branch not found for Workflow, skipping processing`
+- `Failed to create GitHub CheckRun for workflow`
+- `Created Job for Workflow`
+- `Workflow was deleted during reconcile, ignoring`
+- `Cancelled GitHub CheckRun before workflow deletion`
+
+## Operational Notes
+- Check Run identity (`status.checkRunID`) is the authoritative link for later updates.
+- Workflow status conflict handling is implemented with `RetryOnConflict`.
+- The controller uses `status.phase` for lifecycle control; `status.jobs` is not used in control decisions.
+
+## Test Coverage Map
+Primary tests: `internal/controller/workflow_controller_test.go`
+
+Covered scenarios:
+- status updates and conflict retry behavior.
+- finalizer addition and deletion behavior.
+- missing workflow/template/branch paths.
+- job creation path and existing-job update path.
+- check-run cancellation path on deletion.
+- not-found race after check-run creation.
+- helper methods (`setCondition`, status retry errors, deletion helper behavior).
+- broad error table for:
+  - branch/job get failures,
+  - missing GitHub manager/client failures,
+  - check-run create/update failures,
+  - status update failures,
+  - job create and owner-reference errors.
+
+Known coverage gaps:
+- limited dedicated assertions for generated Job security-context fields.
+- no explicit scenario validating repeated steady-state reconciles with unchanged running job status.
+
