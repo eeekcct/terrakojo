@@ -104,6 +104,7 @@ corresponding GitHub Check Run status/conclusion.
 - Status writes use retry-on-conflict to tolerate concurrent updates.
 - If workflow is deleted between check-run creation and status write, not-found is ignored to avoid reconcile loops.
 - When `status.checkRunID` is already set, reconcile reuses that CheckRun instead of creating a new one.
+- When `status.checkRunID` is set but `status.checkRunName` is empty, reconcile rebuilds the default name and persists it before CheckRun updates.
 - If Job create returns `AlreadyExists`, reconcile treats it as a race, re-fetches the Job, and continues.
 - For `AlreadyExists` races, the re-fetched Job must be controlled by the same Workflow UID; otherwise reconcile fails with ownership mismatch.
 

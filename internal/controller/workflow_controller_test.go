@@ -684,6 +684,85 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(updateCalled.Load()).To(BeTrue())
 		})
 
+		It("persists default checkrun name when checkrun id exists but name is empty", func() {
+			ctx := context.Background()
+			testScheme := newWorkflowTestScheme()
+
+			existingCheckRunID := 93
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "workflow-reuse-checkrun-empty-name",
+					Namespace:  "default",
+					Finalizers: []string{workflowFinalizer},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-ref",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+					Path:       "infra/path",
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{
+					CheckRunID: existingCheckRunID,
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-ref",
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      workflow.Spec.Owner,
+					Repository: workflow.Spec.Repository,
+					Name:       "feature",
+					SHA:        workflow.Spec.SHA,
+				},
+			}
+			template := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      workflow.Spec.Template,
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "Test Workflow",
+					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
+					Job:         newTemplateJobSpec("plan-step", []string{"echo", "hello"}),
+				},
+			}
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
+			var updateCalled atomic.Bool
+			ghManager := &fakeGitHubClientManager{
+				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						CreateCheckRunFunc: func(owner, repo, sha, name string) (*ghapi.CheckRun, error) {
+							return nil, fmt.Errorf("create checkrun should not be called")
+						},
+						UpdateCheckRunFunc: func(owner, repo string, checkRunID int64, name, status, conclusion string) error {
+							updateCalled.Store(true)
+							Expect(checkRunID).To(Equal(int64(existingCheckRunID)))
+							Expect(name).To(Equal("Test Workflow(infra/path)"))
+							return nil
+						},
+					}, nil
+				},
+			}
+			reconciler := &WorkflowReconciler{
+				Client:              fakeClient,
+				Scheme:              testScheme,
+				GitHubClientManager: ghManager,
+			}
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updateCalled.Load()).To(BeTrue())
+
+			updated := &terrakojoiov1alpha1.Workflow{}
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
+			Expect(updated.Status.CheckRunName).To(Equal("Test Workflow(infra/path)"))
+			Expect(updated.Status.CheckRunID).To(Equal(existingCheckRunID))
+		})
+
 		It("marks checkrun and workflow failed when job creation fails", func() {
 			ctx := context.Background()
 			testScheme := newWorkflowTestScheme()

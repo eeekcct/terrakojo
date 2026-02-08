@@ -235,6 +235,27 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	} else if checkRunName == "" {
 		checkRunName = defaultCheckRunName
+		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+			if latest.Status.CheckRunName == "" {
+				latest.Status.CheckRunName = checkRunName
+			}
+		}); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				// Workflow was deleted, ignore this reconcile
+				log.Info("Workflow was deleted during reconcile, ignoring",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"checkRunID", checkRunID)
+				return ctrl.Result{}, nil
+			}
+			log.Error(err, "Failed to update Workflow status with default CheckRunName",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"checkRunID", checkRunID)
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Create Job from WorkflowTemplate
@@ -244,6 +265,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	jobCreated := false
 	if err := r.Create(ctx, &job); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			log.Info("Job already exists, re-fetching to continue reconcile",
@@ -310,11 +332,16 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 			return ctrl.Result{}, err
 		}
+	} else {
+		jobCreated = true
 	}
 
-	log.Info("Created Job for Workflow", "jobName", job.Name)
+	if jobCreated {
+		log.Info("Created Job for Workflow", "jobName", job.Name)
+	} else {
+		log.Info("Using existing Job for Workflow", "jobName", job.Name)
+	}
 
-	workflow.Status.Jobs = append(workflow.Status.Jobs, job.Name)
 	phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
 	status, conclusion := r.checkRunStatus(phase)
 	err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
