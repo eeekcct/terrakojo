@@ -23,6 +23,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
@@ -198,38 +199,42 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err := r.Get(ctx, client.ObjectKey{Name: workflow.Spec.Template, Namespace: workflow.Namespace}, &template); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	checkRunName = fmt.Sprintf("%s(%s)", template.Spec.DisplayName, workflow.Spec.Path)
-
-	// Create CheckRun
-	checkRun, err := ghClient.CreateCheckRun(owner, repo, sha, checkRunName)
-	if err != nil {
-		log.Error(err, "Failed to create GitHub CheckRun for workflow",
-			"owner", owner,
-			"repository", repo,
-			"branch", branchRef,
-		)
-		return ctrl.Result{}, err
-	}
-	checkRunID = checkRun.GetID()
-	if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
-		latest.Status.CheckRunName = checkRunName
-		latest.Status.CheckRunID = int(checkRunID)
-	}); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			// Workflow was deleted, ignore this reconcile
-			log.Info("Workflow was deleted during reconcile, ignoring",
+	defaultCheckRunName := fmt.Sprintf("%s(%s)", template.Spec.DisplayName, workflow.Spec.Path)
+	if checkRunID == 0 {
+		checkRunName = defaultCheckRunName
+		// Create CheckRun
+		checkRun, err := ghClient.CreateCheckRun(owner, repo, sha, checkRunName)
+		if err != nil {
+			log.Error(err, "Failed to create GitHub CheckRun for workflow",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+			)
+			return ctrl.Result{}, err
+		}
+		checkRunID = checkRun.GetID()
+		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+			latest.Status.CheckRunName = checkRunName
+			latest.Status.CheckRunID = int(checkRunID)
+		}); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				// Workflow was deleted, ignore this reconcile
+				log.Info("Workflow was deleted during reconcile, ignoring",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"checkRunID", checkRunID)
+				return ctrl.Result{}, nil
+			}
+			log.Error(err, "Failed to update Workflow status with CheckRunID",
 				"owner", owner,
 				"repository", repo,
 				"branch", branchRef,
 				"checkRunID", checkRunID)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, err
 		}
-		log.Error(err, "Failed to update Workflow status with CheckRunID",
-			"owner", owner,
-			"repository", repo,
-			"branch", branchRef,
-			"checkRunID", checkRunID)
-		return ctrl.Result{}, err
+	} else if checkRunName == "" {
+		checkRunName = defaultCheckRunName
 	}
 
 	// Create Job from WorkflowTemplate
@@ -264,6 +269,17 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				"branch", branchRef,
 			)
 		}
+
+		if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
+			log.Info("Job creation failed with non-retriable error; workflow marked failed",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"jobName", jobName,
+			)
+			return ctrl.Result{}, nil
+		}
+
 		return ctrl.Result{}, err
 	}
 
@@ -381,29 +397,34 @@ func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
 	}
 
 	allowPrivilegeEscalation := false
-	for i := range podSpec.Containers {
-		if podSpec.Containers[i].SecurityContext == nil {
-			podSpec.Containers[i].SecurityContext = &corev1.SecurityContext{
+	hardenContainerSecurityContext := func(securityContext **corev1.SecurityContext) {
+		if *securityContext == nil {
+			*securityContext = &corev1.SecurityContext{
 				AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
 			}
-			continue
+			return
 		}
-
-		if podSpec.Containers[i].SecurityContext.AllowPrivilegeEscalation == nil {
-			podSpec.Containers[i].SecurityContext.AllowPrivilegeEscalation = &allowPrivilegeEscalation
+		if (*securityContext).AllowPrivilegeEscalation == nil {
+			(*securityContext).AllowPrivilegeEscalation = &allowPrivilegeEscalation
 		}
-		if podSpec.Containers[i].SecurityContext.Capabilities == nil {
-			podSpec.Containers[i].SecurityContext.Capabilities = &corev1.Capabilities{
+		if (*securityContext).Capabilities == nil {
+			(*securityContext).Capabilities = &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			}
-			continue
+			return
 		}
-		if len(podSpec.Containers[i].SecurityContext.Capabilities.Drop) == 0 {
-			podSpec.Containers[i].SecurityContext.Capabilities.Drop = []corev1.Capability{"ALL"}
+		if len((*securityContext).Capabilities.Drop) == 0 {
+			(*securityContext).Capabilities.Drop = []corev1.Capability{"ALL"}
 		}
+	}
+	for i := range podSpec.Containers {
+		hardenContainerSecurityContext(&podSpec.Containers[i].SecurityContext)
+	}
+	for i := range podSpec.InitContainers {
+		hardenContainerSecurityContext(&podSpec.InitContainers[i].SecurityContext)
 	}
 }
 

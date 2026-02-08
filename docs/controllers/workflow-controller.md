@@ -87,8 +87,8 @@ corresponding GitHub Check Run status/conclusion.
   - `runAsNonRoot=true` (if unset)
   - `runAsUser=1000` (if unset)
   - `seccompProfile=RuntimeDefault` (if unset, or if type is empty)
-  - container `allowPrivilegeEscalation=false` (if unset)
-  - container `capabilities.drop=["ALL"]` (if unset or empty)
+  - `containers[]` and `initContainers[]`: `allowPrivilegeEscalation=false` (if unset)
+  - `containers[]` and `initContainers[]`: `capabilities.drop=["ALL"]` (if unset or empty)
 - Container names are passed through from `template.spec.job`; Kubernetes Job validation rejects invalid names.
 
 ## Check Run Mapping
@@ -103,6 +103,7 @@ corresponding GitHub Check Run status/conclusion.
 - Deterministic Job naming (workflow name) prevents duplicate concurrent jobs for one workflow.
 - Status writes use retry-on-conflict to tolerate concurrent updates.
 - If workflow is deleted between check-run creation and status write, not-found is ignored to avoid reconcile loops.
+- When `status.checkRunID` is already set, reconcile reuses that CheckRun instead of creating a new one.
 
 ## Failure Handling
 - Missing `GitHubClientManager`: hard error.
@@ -110,7 +111,8 @@ corresponding GitHub Check Run status/conclusion.
 - Missing branch in normal path: workflow is deleted (best effort).
 - Check Run create/update failures: hard error.
 - Job create/get failures: hard error.
-- If Job creation fails after Check Run creation, controller best-effort updates Check Run to `completed/failure` and sets workflow phase to `Failed`, then returns the original error.
+- If Job creation fails after Check Run creation, controller best-effort updates Check Run to `completed/failure` and sets workflow phase to `Failed`.
+- Job creation errors classified as Kubernetes `Invalid` or `Forbidden` are treated as terminal and return success (`nil`) to avoid retry loops and duplicate CheckRuns.
 - Status update failures: hard error unless explicitly treated as not-found race.
 - Template not found: treated as ignore-notfound (no error return).
 

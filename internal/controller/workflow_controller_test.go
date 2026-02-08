@@ -26,7 +26,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -223,7 +225,7 @@ var _ = Describe("Workflow Controller", func() {
 	})
 
 	When("reconciling Workflow resources (envtest)", func() {
-		It("returns an error when template job has an invalid container name", func() {
+		It("marks workflow failed when template job has an invalid container name", func() {
 			ctx := context.Background()
 			namespace := createTestNamespace(ctx)
 			workflow := &terrakojoiov1alpha1.Workflow{
@@ -296,8 +298,16 @@ var _ = Describe("Workflow Controller", func() {
 			}
 
 			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("containers[0].name"))
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &terrakojoiov1alpha1.Workflow{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
+			Expect(updated.Status.CheckRunID).To(Equal(int(checkRunID)))
+			Expect(updated.Status.Phase).To(Equal(string(WorkflowPhaseFailed)))
+
+			job := &batchv1.Job{}
+			jobErr := k8sClient.Get(ctx, client.ObjectKey{Name: workflow.Name, Namespace: workflow.Namespace}, job)
+			Expect(apierrors.IsNotFound(jobErr)).To(BeTrue())
 		})
 	})
 
@@ -575,6 +585,83 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(updateCalled.Load()).To(BeTrue())
 		})
 
+		It("reuses existing checkrun when status already has checkrun id", func() {
+			ctx := context.Background()
+			testScheme := newWorkflowTestScheme()
+
+			existingCheckRunID := 88
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "workflow-reuse-checkrun",
+					Namespace:  "default",
+					Finalizers: []string{workflowFinalizer},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-ref",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+					Path:       "infra/path",
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{
+					CheckRunID:   existingCheckRunID,
+					CheckRunName: "existing-checkrun",
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-ref",
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      workflow.Spec.Owner,
+					Repository: workflow.Spec.Repository,
+					Name:       "feature",
+					SHA:        workflow.Spec.SHA,
+				},
+			}
+			template := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      workflow.Spec.Template,
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "Test Workflow",
+					Match: terrakojoiov1alpha1.WorkflowMatch{
+						Paths: []string{"**/*"},
+					},
+					Job: newTemplateJobSpec("plan-step", []string{"echo", "hello"}),
+				},
+			}
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
+			var updateCalled atomic.Bool
+			ghManager := &fakeGitHubClientManager{
+				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						CreateCheckRunFunc: func(owner, repo, sha, name string) (*ghapi.CheckRun, error) {
+							return nil, fmt.Errorf("create checkrun should not be called")
+						},
+						UpdateCheckRunFunc: func(owner, repo string, checkRunID int64, name, status, conclusion string) error {
+							updateCalled.Store(true)
+							Expect(checkRunID).To(Equal(int64(existingCheckRunID)))
+							Expect(name).To(Equal("existing-checkrun"))
+							return nil
+						},
+					}, nil
+				},
+			}
+			reconciler := &WorkflowReconciler{
+				Client:              fakeClient,
+				Scheme:              testScheme,
+				GitHubClientManager: ghManager,
+			}
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updateCalled.Load()).To(BeTrue())
+		})
+
 		It("marks checkrun and workflow failed when job creation fails", func() {
 			ctx := context.Background()
 			testScheme := newWorkflowTestScheme()
@@ -655,6 +742,105 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(baseClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
 			Expect(updated.Status.Phase).To(Equal(string(WorkflowPhaseFailed)))
 		})
+
+		DescribeTable("treats non-retriable job create errors as terminal",
+			func(createJobErr error) {
+				ctx := context.Background()
+				testScheme := newWorkflowTestScheme()
+
+				workflow := &terrakojoiov1alpha1.Workflow{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:       "workflow-create-job-terminal-error",
+						Namespace:  "default",
+						Finalizers: []string{workflowFinalizer},
+					},
+					Spec: terrakojoiov1alpha1.WorkflowSpec{
+						Owner:      "owner",
+						Repository: "repo",
+						Branch:     "branch-ref",
+						SHA:        "0123456789abcdef0123456789abcdef01234567",
+						Template:   "template",
+						Path:       "infra/path",
+					},
+				}
+				branch := &terrakojoiov1alpha1.Branch{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "branch-ref",
+						Namespace: workflow.Namespace,
+					},
+					Spec: terrakojoiov1alpha1.BranchSpec{
+						Owner:      workflow.Spec.Owner,
+						Repository: workflow.Spec.Repository,
+						Name:       "feature",
+						SHA:        workflow.Spec.SHA,
+					},
+				}
+				template := &terrakojoiov1alpha1.WorkflowTemplate{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      workflow.Spec.Template,
+						Namespace: workflow.Namespace,
+					},
+					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+						DisplayName: "Test Workflow",
+						Match: terrakojoiov1alpha1.WorkflowMatch{
+							Paths: []string{"**/*"},
+						},
+						Job: newTemplateJobSpec("plan-step", []string{"echo", "hello"}),
+					},
+				}
+				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
+				var createCalled int32
+				var updateCalled atomic.Bool
+				checkRunID := int64(123)
+				ghManager := &fakeGitHubClientManager{
+					GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+						return &fakeGitHubClient{
+							CreateCheckRunFunc: func(owner, repo, sha, name string) (*ghapi.CheckRun, error) {
+								atomic.AddInt32(&createCalled, 1)
+								return &ghapi.CheckRun{ID: &checkRunID}, nil
+							},
+							UpdateCheckRunFunc: func(owner, repo string, checkRunID int64, name, status, conclusion string) error {
+								if status == checkRunStatusCompleted && conclusion == "failure" {
+									updateCalled.Store(true)
+								}
+								return nil
+							},
+						}, nil
+					},
+				}
+				reconciler := &WorkflowReconciler{
+					Client:              &jobCreateErrorClient{Client: baseClient, err: createJobErr},
+					Scheme:              testScheme,
+					GitHubClientManager: ghManager,
+				}
+
+				_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(updateCalled.Load()).To(BeTrue())
+				Expect(createCalled).To(Equal(int32(1)))
+
+				updated := &terrakojoiov1alpha1.Workflow{}
+				Expect(baseClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
+				Expect(updated.Status.Phase).To(Equal(string(WorkflowPhaseFailed)))
+				Expect(updated.Status.CheckRunID).To(Equal(int(checkRunID)))
+
+				_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(createCalled).To(Equal(int32(1)))
+			},
+			Entry("invalid error", apierrors.NewInvalid(
+				schema.GroupKind{Group: "batch", Kind: "Job"},
+				"workflow-create-job-terminal-error",
+				field.ErrorList{
+					field.Invalid(field.NewPath("spec", "template", "spec", "containers").Index(0).Child("name"), "Plan Step", "must be lowercase"),
+				},
+			)),
+			Entry("forbidden error", apierrors.NewForbidden(
+				schema.GroupResource{Group: "batch", Resource: "jobs"},
+				"workflow-create-job-terminal-error",
+				fmt.Errorf("forbidden"),
+			)),
+		)
 
 		It("updates workflow when job exists", func() {
 			ctx := context.Background()
@@ -1446,7 +1632,25 @@ var _ = Describe("Workflow Controller", func() {
 				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 					DisplayName: "test",
 					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-					Job:         newTemplateJobSpec("Plan Step", []string{"echo", "hello"}),
+					Job: batchv1.JobSpec{
+						Template: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:    "Plan Step",
+										Image:   "busybox",
+										Command: []string{"echo", "hello"},
+									},
+								},
+								InitContainers: []corev1.Container{
+									{
+										Name:  "init-step",
+										Image: "busybox",
+									},
+								},
+							},
+						},
+					},
 				},
 			}
 
@@ -1473,6 +1677,13 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(*job.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation).To(BeFalse())
 			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities).NotTo(BeNil())
 			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Drop).To(Equal([]corev1.Capability{"ALL"}))
+			Expect(job.Spec.Template.Spec.InitContainers).To(HaveLen(1))
+			Expect(job.Spec.Template.Spec.InitContainers[0].Name).To(Equal("init-step"))
+			Expect(job.Spec.Template.Spec.InitContainers[0].SecurityContext).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.InitContainers[0].SecurityContext.AllowPrivilegeEscalation).NotTo(BeNil())
+			Expect(*job.Spec.Template.Spec.InitContainers[0].SecurityContext.AllowPrivilegeEscalation).To(BeFalse())
+			Expect(job.Spec.Template.Spec.InitContainers[0].SecurityContext.Capabilities).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.InitContainers[0].SecurityContext.Capabilities.Drop).To(Equal([]corev1.Capability{"ALL"}))
 		})
 
 		It("createJobFromTemplate preserves explicit security settings", func() {
