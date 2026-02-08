@@ -245,42 +245,57 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if err := r.Create(ctx, &job); err != nil {
-		log.Error(err, "Failed to create Job for Workflow",
-			"owner", owner,
-			"repository", repo,
-			"branch", branchRef,
-			"jobName", jobName,
-		)
-
-		failedStatus, failedConclusion := r.checkRunStatus(WorkflowPhaseFailed)
-		if updateErr := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, failedStatus, failedConclusion); updateErr != nil {
-			log.Error(updateErr, "Failed to mark GitHub CheckRun failed after Job creation failure",
-				"owner", owner,
-				"repository", repo,
-				"branch", branchRef,
-				"checkRunID", checkRunID,
-			)
-		}
-
-		if statusErr := r.updateWorkflowStatus(ctx, &workflow, WorkflowPhaseFailed); statusErr != nil && client.IgnoreNotFound(statusErr) != nil {
-			log.Error(statusErr, "Failed to update Workflow status after Job creation failure",
-				"owner", owner,
-				"repository", repo,
-				"branch", branchRef,
-			)
-		}
-
-		if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
-			log.Info("Job creation failed with non-retriable error; workflow marked failed",
+		if apierrors.IsAlreadyExists(err) {
+			log.Info("Job already exists, re-fetching to continue reconcile",
 				"owner", owner,
 				"repository", repo,
 				"branch", branchRef,
 				"jobName", jobName,
 			)
-			return ctrl.Result{}, nil
-		}
+			if getErr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job); getErr != nil {
+				if client.IgnoreNotFound(getErr) == nil {
+					return ctrl.Result{Requeue: true}, nil
+				}
+				return ctrl.Result{}, getErr
+			}
+		} else {
+			log.Error(err, "Failed to create Job for Workflow",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"jobName", jobName,
+			)
 
-		return ctrl.Result{}, err
+			failedStatus, failedConclusion := r.checkRunStatus(WorkflowPhaseFailed)
+			if updateErr := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, failedStatus, failedConclusion); updateErr != nil {
+				log.Error(updateErr, "Failed to mark GitHub CheckRun failed after Job creation failure",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"checkRunID", checkRunID,
+				)
+			}
+
+			if statusErr := r.updateWorkflowStatus(ctx, &workflow, WorkflowPhaseFailed); statusErr != nil && client.IgnoreNotFound(statusErr) != nil {
+				log.Error(statusErr, "Failed to update Workflow status after Job creation failure",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+				)
+			}
+
+			if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
+				log.Info("Job creation failed with non-retriable error; workflow marked failed",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"jobName", jobName,
+				)
+				return ctrl.Result{}, nil
+			}
+
+			return ctrl.Result{}, err
+		}
 	}
 
 	log.Info("Created Job for Workflow", "jobName", job.Name)
@@ -397,10 +412,14 @@ func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
 	}
 
 	allowPrivilegeEscalation := false
+	boolPtr := func(v bool) *bool {
+		value := v
+		return &value
+	}
 	hardenContainerSecurityContext := func(securityContext **corev1.SecurityContext) {
 		if *securityContext == nil {
 			*securityContext = &corev1.SecurityContext{
-				AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+				AllowPrivilegeEscalation: boolPtr(allowPrivilegeEscalation),
 				Capabilities: &corev1.Capabilities{
 					Drop: []corev1.Capability{"ALL"},
 				},
@@ -408,7 +427,7 @@ func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
 			return
 		}
 		if (*securityContext).AllowPrivilegeEscalation == nil {
-			(*securityContext).AllowPrivilegeEscalation = &allowPrivilegeEscalation
+			(*securityContext).AllowPrivilegeEscalation = boolPtr(allowPrivilegeEscalation)
 		}
 		if (*securityContext).Capabilities == nil {
 			(*securityContext).Capabilities = &corev1.Capabilities{
