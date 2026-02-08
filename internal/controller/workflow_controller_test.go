@@ -61,6 +61,23 @@ func newWorkflowFakeClient(testScheme *runtime.Scheme, objs ...client.Object) cl
 	return builder.Build()
 }
 
+func newTemplateJobSpec(containerName, image string, command []string) batchv1.JobSpec {
+	return batchv1.JobSpec{
+		Template: corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				RestartPolicy: corev1.RestartPolicyNever,
+				Containers: []corev1.Container{
+					{
+						Name:    containerName,
+						Image:   image,
+						Command: command,
+					},
+				},
+			},
+		},
+	}
+}
+
 type branchGetErrorClient struct {
 	client.Client
 	err error
@@ -437,13 +454,7 @@ var _ = Describe("Workflow Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"**/*"},
 					},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{
-							Name:    "Plan Step",
-							Image:   "busybox",
-							Command: []string{"echo", "hello"},
-						},
-					},
+					Job: newTemplateJobSpec("Plan Step", "busybox", []string{"echo", "hello"}),
 				},
 			}
 
@@ -673,9 +684,7 @@ var _ = Describe("Workflow Controller", func() {
 				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 					DisplayName: "Test",
 					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{Name: "step", Image: "busybox", Command: []string{"echo"}},
-					},
+					Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
 				},
 			}
 
@@ -1052,7 +1061,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
+						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
 					},
 				}
 				client := fake.NewClientBuilder().
@@ -1101,7 +1110,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
+						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
 					},
 				}
 				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
@@ -1148,7 +1157,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
+						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
 					},
 				}
 				client := fake.NewClientBuilder().
@@ -1198,7 +1207,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
+						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
 					},
 				}
 				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
@@ -1244,7 +1253,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Steps:       []terrakojoiov1alpha1.WorkflowStep{{Name: "step", Image: "busybox", Command: []string{"echo"}}},
+						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
 					},
 				}
 				client := newWorkflowFakeClient(testScheme, workflow, branch, template)
@@ -1279,6 +1288,110 @@ var _ = Describe("Workflow Controller", func() {
 			Entry("truncates over 63 characters", strings.Repeat("a", 70), strings.Repeat("a", 63)),
 			Entry("trims trailing hyphen after truncation", strings.Repeat("a", 62)+"-b", strings.Repeat("a", 62)),
 		)
+
+		It("createJobFromTemplate applies defaults and normalizes container names", func() {
+			reconciler := &WorkflowReconciler{}
+			template := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "template",
+					Namespace: "template-ns",
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "test",
+					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
+					Job:         newTemplateJobSpec("Plan Step", "busybox", []string{"echo", "hello"}),
+				},
+			}
+
+			job := reconciler.createJobFromTemplate("workflow-name", "workflow-ns", template)
+			Expect(job.Name).To(Equal("workflow-name"))
+			Expect(job.Namespace).To(Equal("workflow-ns"))
+
+			Expect(job.Spec.BackoffLimit).NotTo(BeNil())
+			Expect(*job.Spec.BackoffLimit).To(Equal(int32(0)))
+			Expect(job.Spec.Template.Spec.RestartPolicy).To(Equal(corev1.RestartPolicyNever))
+
+			Expect(job.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.SecurityContext.RunAsNonRoot).NotTo(BeNil())
+			Expect(*job.Spec.Template.Spec.SecurityContext.RunAsNonRoot).To(BeTrue())
+			Expect(job.Spec.Template.Spec.SecurityContext.RunAsUser).NotTo(BeNil())
+			Expect(*job.Spec.Template.Spec.SecurityContext.RunAsUser).To(Equal(int64(1000)))
+			Expect(job.Spec.Template.Spec.SecurityContext.SeccompProfile).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.SecurityContext.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
+
+			Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("plan-step"))
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation).NotTo(BeNil())
+			Expect(*job.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation).To(BeFalse())
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Drop).To(Equal([]corev1.Capability{"ALL"}))
+		})
+
+		It("createJobFromTemplate preserves explicit security settings", func() {
+			reconciler := &WorkflowReconciler{}
+
+			backoff := int32(3)
+			runAsNonRoot := false
+			runAsUser := int64(2000)
+			allowPrivilegeEscalation := true
+			template := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "template",
+					Namespace: "template-ns",
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "test",
+					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
+					Job: batchv1.JobSpec{
+						BackoffLimit: &backoff,
+						Template: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								RestartPolicy: corev1.RestartPolicyOnFailure,
+								SecurityContext: &corev1.PodSecurityContext{
+									RunAsNonRoot: &runAsNonRoot,
+									RunAsUser:    &runAsUser,
+									SeccompProfile: &corev1.SeccompProfile{
+										Type: corev1.SeccompProfileTypeUnconfined,
+									},
+								},
+								Containers: []corev1.Container{
+									{
+										Name:  "custom",
+										Image: "busybox",
+										SecurityContext: &corev1.SecurityContext{
+											AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+											Capabilities: &corev1.Capabilities{
+												Drop: []corev1.Capability{"NET_RAW"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			job := reconciler.createJobFromTemplate("workflow-name", "workflow-ns", template)
+			Expect(job.Spec.BackoffLimit).NotTo(BeNil())
+			Expect(*job.Spec.BackoffLimit).To(Equal(int32(3)))
+			Expect(job.Spec.Template.Spec.RestartPolicy).To(Equal(corev1.RestartPolicyOnFailure))
+			Expect(job.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.SecurityContext.RunAsNonRoot).NotTo(BeNil())
+			Expect(*job.Spec.Template.Spec.SecurityContext.RunAsNonRoot).To(BeFalse())
+			Expect(job.Spec.Template.Spec.SecurityContext.RunAsUser).NotTo(BeNil())
+			Expect(*job.Spec.Template.Spec.SecurityContext.RunAsUser).To(Equal(int64(2000)))
+			Expect(job.Spec.Template.Spec.SecurityContext.SeccompProfile).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.SecurityContext.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeUnconfined))
+			Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("custom"))
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation).NotTo(BeNil())
+			Expect(*job.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation).To(BeTrue())
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities).NotTo(BeNil())
+			Expect(job.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Drop).To(Equal([]corev1.Capability{"NET_RAW"}))
+		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {
 			reconciler := &WorkflowReconciler{}

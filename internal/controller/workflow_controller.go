@@ -235,7 +235,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Create Job from WorkflowTemplate
-	job = r.createJobFromTemplate(jobName, &template)
+	job = r.createJobFromTemplate(jobName, workflow.Namespace, &template)
 
 	if err := controllerutil.SetControllerReference(&workflow, &job, r.Scheme); err != nil {
 		return ctrl.Result{}, err
@@ -311,50 +311,80 @@ func (r *WorkflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *WorkflowReconciler) createJobFromTemplate(jobName string, template *terrakojoiov1alpha1.WorkflowTemplate) batchv1.Job {
-	// for now, we execute first step only
-	step := template.Spec.Steps[0]
-
-	// Normalize container name to comply with RFC 1123
-	containerName := r.normalizeContainerName(step.Name)
-
-	backoffLimit := int32(0)
-	runAsNonRoot := true
-	runAsUser := int64(1000)
-	allowPrivilegeEscalation := false
-	seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+func (r *WorkflowReconciler) createJobFromTemplate(jobName, workflowNamespace string, template *terrakojoiov1alpha1.WorkflowTemplate) batchv1.Job {
+	jobSpec := template.Spec.Job.DeepCopy()
+	r.applyJobDefaults(jobSpec)
 
 	return batchv1.Job{
 		ObjectMeta: ctrl.ObjectMeta{
 			Name:      jobName,
-			Namespace: template.Namespace,
+			Namespace: workflowNamespace,
 		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoffLimit,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot:   &runAsNonRoot,
-						RunAsUser:      &runAsUser,
-						SeccompProfile: seccompProfile,
-					},
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{
-						{
-							Name:    containerName,
-							Image:   step.Image,
-							Command: step.Command,
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-							},
-						},
-					},
+		Spec: *jobSpec,
+	}
+}
+
+func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
+	backoffLimit := int32(0)
+	if jobSpec.BackoffLimit == nil {
+		jobSpec.BackoffLimit = &backoffLimit
+	}
+
+	podSpec := &jobSpec.Template.Spec
+	if podSpec.RestartPolicy == "" {
+		podSpec.RestartPolicy = corev1.RestartPolicyNever
+	}
+
+	runAsNonRoot := true
+	runAsUser := int64(1000)
+	seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	if podSpec.SecurityContext == nil {
+		podSpec.SecurityContext = &corev1.PodSecurityContext{
+			RunAsNonRoot:   &runAsNonRoot,
+			RunAsUser:      &runAsUser,
+			SeccompProfile: seccompProfile,
+		}
+	} else {
+		if podSpec.SecurityContext.RunAsNonRoot == nil {
+			podSpec.SecurityContext.RunAsNonRoot = &runAsNonRoot
+		}
+		if podSpec.SecurityContext.RunAsUser == nil {
+			podSpec.SecurityContext.RunAsUser = &runAsUser
+		}
+		if podSpec.SecurityContext.SeccompProfile == nil {
+			podSpec.SecurityContext.SeccompProfile = seccompProfile
+		}
+	}
+
+	allowPrivilegeEscalation := false
+	for i := range podSpec.Containers {
+		if strings.TrimSpace(podSpec.Containers[i].Name) == "" {
+			podSpec.Containers[i].Name = fmt.Sprintf("container-%d", i+1)
+		}
+		podSpec.Containers[i].Name = r.normalizeContainerName(podSpec.Containers[i].Name)
+
+		if podSpec.Containers[i].SecurityContext == nil {
+			podSpec.Containers[i].SecurityContext = &corev1.SecurityContext{
+				AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+				Capabilities: &corev1.Capabilities{
+					Drop: []corev1.Capability{"ALL"},
 				},
-			},
-		},
+			}
+			continue
+		}
+
+		if podSpec.Containers[i].SecurityContext.AllowPrivilegeEscalation == nil {
+			podSpec.Containers[i].SecurityContext.AllowPrivilegeEscalation = &allowPrivilegeEscalation
+		}
+		if podSpec.Containers[i].SecurityContext.Capabilities == nil {
+			podSpec.Containers[i].SecurityContext.Capabilities = &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			}
+			continue
+		}
+		if len(podSpec.Containers[i].SecurityContext.Capabilities.Drop) == 0 {
+			podSpec.Containers[i].SecurityContext.Capabilities.Drop = []corev1.Capability{"ALL"}
+		}
 	}
 }
 

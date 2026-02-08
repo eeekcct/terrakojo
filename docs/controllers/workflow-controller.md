@@ -70,17 +70,23 @@ corresponding GitHub Check Run status/conclusion.
 - build check run name: `<template.displayName>(<workflow.spec.path>)`.
 - create GitHub Check Run (queued).
 - persist `status.checkRunID` and `status.checkRunName` using conflict-retry update.
-- create Job from the first template step only.
+- create Job from `template.spec.job`.
 - set workflow as controller owner of the Job.
 - create Job.
 - compute phase for new Job object and update Check Run/status accordingly.
 
 ## Job Construction Rules
-- Only `template.spec.steps[0]` is executed.
+- `template.spec.job` is copied into the created Job spec.
+- Job metadata is controller-assigned:
+  - `metadata.name = workflow.name`
+  - `metadata.namespace = workflow.namespace`
+- If fields are omitted in `spec.job`, the controller applies secure defaults:
+  - `backoffLimit = 0`
+  - `restartPolicy = Never`
 - Job pod hardening defaults:
-- `runAsNonRoot=true`
-- `runAsUser=1000`
-- `seccompProfile=RuntimeDefault`
+- `runAsNonRoot=true` (if unset)
+- `runAsUser=1000` (if unset)
+- `seccompProfile=RuntimeDefault` (if unset)
 - container `allowPrivilegeEscalation=false`
 - container drops all capabilities.
 - Container name is normalized to RFC1123-like constraints (lowercase, alnum/hyphen, max 63).
@@ -147,6 +153,5 @@ Covered scenarios:
   - job create and owner-reference errors.
 
 Known coverage gaps:
-- limited dedicated assertions for generated Job security-context fields.
+- no end-to-end assertion for user-specified `spec.job` security overrides.
 - no explicit scenario validating repeated steady-state reconciles with unchanged running job status.
-

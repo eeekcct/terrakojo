@@ -4,7 +4,7 @@
 - **Repository**: spec `{owner,name,type,defaultBranch,githubSecretRef{name[,namespace]}}`; status `conditions`, `synced`, `lastDefaultBranchHeadSha` (default-branch sync cursor).
 - **Branch**: spec `{owner,repository,name,sha,prNumber?}`; status `conditions`, `workflows[]`, `changedFiles[]`.
 - **Workflow**: spec `{owner,repository,branch,sha,template,path?,parameters?}`; status `conditions`, `phase`, `jobs[]`, `checkRunID`, `checkRunName`.
-- **WorkflowTemplate**: spec `{displayName, match.paths[], steps[] {name,image,command[]}}`.
+- **WorkflowTemplate**: spec `{displayName, match.paths[], job}`.
 
 ## Controllers
 - **RepositoryReconciler** (`internal/controller/repository_controller.go`)
@@ -23,7 +23,7 @@
   - Uses field index `metadata.ownerReferences.uid` for Workflow lookup.
 
 - **WorkflowReconciler** (`internal/controller/workflow_controller.go`)
-  - Creates GitHub CheckRun and a Job from the first step of the WorkflowTemplate.
+  - Creates GitHub CheckRun and a Job from `WorkflowTemplate.spec.job`.
   - Maps Job status → Workflow `phase` and updates CheckRun.
   - Finalizer cancels CheckRun on deletion if Job not finished; if owning Branch is missing, deletes the Workflow.
 
