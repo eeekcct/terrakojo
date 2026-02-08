@@ -105,6 +105,7 @@ corresponding GitHub Check Run status/conclusion.
 - If workflow is deleted between check-run creation and status write, not-found is ignored to avoid reconcile loops.
 - When `status.checkRunID` is already set, reconcile reuses that CheckRun instead of creating a new one.
 - If Job create returns `AlreadyExists`, reconcile treats it as a race, re-fetches the Job, and continues.
+- For `AlreadyExists` races, the re-fetched Job must be controlled by the same Workflow UID; otherwise reconcile fails with ownership mismatch.
 
 ## Failure Handling
 - Missing `GitHubClientManager`: hard error.

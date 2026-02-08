@@ -258,6 +258,20 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				}
 				return ctrl.Result{}, getErr
 			}
+			controllerRef := metav1.GetControllerOf(&job)
+			if controllerRef == nil || controllerRef.UID != workflow.UID {
+				ownershipErr := fmt.Errorf(
+					"existing Job %s/%s is not controlled by Workflow %s/%s",
+					job.Namespace, job.Name, workflow.Namespace, workflow.Name,
+				)
+				log.Error(ownershipErr, "Existing Job is not controlled by this Workflow; refusing to adopt",
+					"jobName", jobName,
+					"jobNamespace", job.Namespace,
+					"workflowName", workflow.Name,
+					"workflowNamespace", workflow.Namespace,
+				)
+				return ctrl.Result{}, ownershipErr
+			}
 		} else {
 			log.Error(err, "Failed to create Job for Workflow",
 				"owner", owner,

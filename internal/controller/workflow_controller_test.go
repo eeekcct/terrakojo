@@ -774,6 +774,7 @@ var _ = Describe("Workflow Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       "workflow-job-race-already-exists",
 					Namespace:  "default",
+					UID:        types.UID("workflow-race-uid"),
 					Finalizers: []string{workflowFinalizer},
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
@@ -812,6 +813,15 @@ var _ = Describe("Workflow Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      workflow.Name,
 					Namespace: workflow.Namespace,
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: terrakojoiov1alpha1.GroupVersion.String(),
+							Kind:       "Workflow",
+							Name:       workflow.Name,
+							UID:        workflow.UID,
+							Controller: func() *bool { v := true; return &v }(),
+						},
+					},
 				},
 				Status: batchv1.JobStatus{
 					Succeeded: 1,
@@ -845,6 +855,91 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(updateStatus).To(Equal(checkRunStatusCompleted))
 			Expect(updateConclusion).To(Equal("success"))
+		})
+
+		It("returns error when already existing job is not owned by workflow", func() {
+			ctx := context.Background()
+			testScheme := newWorkflowTestScheme()
+
+			checkRunID := int64(89)
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "workflow-job-race-ownership-mismatch",
+					Namespace:  "default",
+					UID:        types.UID("workflow-owner-uid"),
+					Finalizers: []string{workflowFinalizer},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-ref",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+					Path:       "infra/path",
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-ref",
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      workflow.Spec.Owner,
+					Repository: workflow.Spec.Repository,
+					Name:       "feature",
+					SHA:        workflow.Spec.SHA,
+				},
+			}
+			template := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      workflow.Spec.Template,
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "Test Workflow",
+					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
+					Job:         newTemplateJobSpec("plan-step", []string{"echo", "hello"}),
+				},
+			}
+			existingJob := &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      workflow.Name,
+					Namespace: workflow.Namespace,
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: terrakojoiov1alpha1.GroupVersion.String(),
+							Kind:       "Workflow",
+							Name:       workflow.Name,
+							UID:        types.UID("another-workflow-uid"),
+							Controller: func() *bool { v := true; return &v }(),
+						},
+					},
+				},
+				Status: batchv1.JobStatus{
+					Succeeded: 1,
+				},
+			}
+
+			baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template, existingJob)
+			raceClient := &jobAlreadyExistsRaceClient{Client: baseClient}
+			ghManager := &fakeGitHubClientManager{
+				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						CreateCheckRunFunc: func(owner, repo, sha, name string) (*ghapi.CheckRun, error) {
+							return &ghapi.CheckRun{ID: &checkRunID}, nil
+						},
+					}, nil
+				},
+			}
+			reconciler := &WorkflowReconciler{
+				Client:              raceClient,
+				Scheme:              testScheme,
+				GitHubClientManager: ghManager,
+			}
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("is not controlled by Workflow"))
 		})
 
 		DescribeTable("treats non-retriable job create errors as terminal",
