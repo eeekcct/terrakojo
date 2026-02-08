@@ -61,7 +61,7 @@ func newWorkflowFakeClient(testScheme *runtime.Scheme, objs ...client.Object) cl
 	return builder.Build()
 }
 
-func newTemplateJobSpec(containerName, image string, command []string) batchv1.JobSpec {
+func newTemplateJobSpec(containerName string, command []string) batchv1.JobSpec {
 	return batchv1.JobSpec{
 		Template: corev1.PodTemplateSpec{
 			Spec: corev1.PodSpec{
@@ -69,7 +69,7 @@ func newTemplateJobSpec(containerName, image string, command []string) batchv1.J
 				Containers: []corev1.Container{
 					{
 						Name:    containerName,
-						Image:   image,
+						Image:   "busybox",
 						Command: command,
 					},
 				},
@@ -454,7 +454,7 @@ var _ = Describe("Workflow Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"**/*"},
 					},
-					Job: newTemplateJobSpec("Plan Step", "busybox", []string{"echo", "hello"}),
+					Job: newTemplateJobSpec("Plan Step", []string{"echo", "hello"}),
 				},
 			}
 
@@ -684,7 +684,7 @@ var _ = Describe("Workflow Controller", func() {
 				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 					DisplayName: "Test",
 					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-					Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
+					Job:         newTemplateJobSpec("step", []string{"echo"}),
 				},
 			}
 
@@ -1061,7 +1061,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
+						Job:         newTemplateJobSpec("step", []string{"echo"}),
 					},
 				}
 				client := fake.NewClientBuilder().
@@ -1110,7 +1110,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
+						Job:         newTemplateJobSpec("step", []string{"echo"}),
 					},
 				}
 				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
@@ -1157,7 +1157,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
+						Job:         newTemplateJobSpec("step", []string{"echo"}),
 					},
 				}
 				client := fake.NewClientBuilder().
@@ -1207,7 +1207,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
+						Job:         newTemplateJobSpec("step", []string{"echo"}),
 					},
 				}
 				baseClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
@@ -1253,7 +1253,7 @@ var _ = Describe("Workflow Controller", func() {
 					Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 						DisplayName: "Test",
 						Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-						Job:         newTemplateJobSpec("step", "busybox", []string{"echo"}),
+						Job:         newTemplateJobSpec("step", []string{"echo"}),
 					},
 				}
 				client := newWorkflowFakeClient(testScheme, workflow, branch, template)
@@ -1299,7 +1299,7 @@ var _ = Describe("Workflow Controller", func() {
 				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
 					DisplayName: "test",
 					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
-					Job:         newTemplateJobSpec("Plan Step", "busybox", []string{"echo", "hello"}),
+					Job:         newTemplateJobSpec("Plan Step", []string{"echo", "hello"}),
 				},
 			}
 
