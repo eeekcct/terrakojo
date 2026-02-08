@@ -113,7 +113,7 @@ corresponding GitHub Check Run status/conclusion.
 - Branch lookup failure (non-notfound): hard error.
 - Missing branch in normal path: workflow is deleted (best effort).
 - Check Run create/update failures: hard error.
-- Job create/get failures: hard error.
+- Job create/get failures: hard error (except Job creation errors classified as Kubernetes `Invalid` or `Forbidden`, which are treated as terminal success).
 - If Job creation fails after Check Run creation, controller best-effort updates Check Run to `completed/failure` and sets workflow phase to `Failed`.
 - Job creation errors classified as Kubernetes `Invalid` or `Forbidden` are treated as terminal and return success (`nil`) to avoid retry loops and duplicate CheckRuns.
 - Status update failures: hard error unless explicitly treated as not-found race.

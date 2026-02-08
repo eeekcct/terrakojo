@@ -3,7 +3,7 @@
 ## Custom Resources (v1alpha1)
 - **Repository**: spec `{owner,name,type,defaultBranch,githubSecretRef{name[,namespace]}}`; status `conditions`, `synced`, `lastDefaultBranchHeadSha` (default-branch sync cursor).
 - **Branch**: spec `{owner,repository,name,sha,prNumber?}`; status `conditions`, `workflows[]`, `changedFiles[]`.
-- **Workflow**: spec `{owner,repository,branch,sha,template,path?,parameters?}`; status `conditions`, `phase`, `jobs[]`, `checkRunID`, `checkRunName`.
+- **Workflow**: spec `{owner,repository,branch,sha,template,path?,parameters?}`; status `conditions`, `phase`, `jobs[]` (legacy/compatibility field; not actively maintained), `checkRunID`, `checkRunName`.
 - **WorkflowTemplate**: spec `{displayName, match.paths[], job}`.
 
 ## Controllers
