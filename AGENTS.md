@@ -33,4 +33,6 @@ This repository is a Kubernetes controller (kubebuilder). Primary doc: docs/over
 - Commit events must not be missed; handle duplicates/out-of-order and keep a recovery/HA plan beyond GitHub retries.
 - Default branch commits are represented as per-commit Branch CRs; non-default branches keep one Branch CR per ref from GitHub sync (no Repository status lists).
 - Branch cleanup: default-branch commit Branches are deleted after workflows reach terminal state; non-default Branches are deleted when GitHub no longer lists the ref.
-- config/samples are known to be outdated (missing required fields).
+- config/samples default kustomization includes only user-authored resources
+  (`Repository`, `WorkflowTemplate`). `Branch` and `Workflow` samples are
+  reference-only because they are controller-managed.

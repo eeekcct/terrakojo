@@ -1,7 +1,9 @@
 ## Append samples of your project ##
 resources:
 - v1alpha1_repository.yaml
-- v1alpha1_branch.yaml
-- v1alpha1_workflow.yaml
 - v1alpha1_workflowtemplate.yaml
+# NOTE:
+# Branch and Workflow resources are controller-managed in normal operation.
+# They are kept as reference manifests in this directory, but are intentionally
+# excluded from default sample application.
 # +kubebuilder:scaffold:manifestskustomizesamples

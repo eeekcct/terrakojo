@@ -27,6 +27,13 @@
   - Maps Job status → Workflow `phase` and updates CheckRun.
   - Finalizer cancels CheckRun on deletion if Job not finished; if owning Branch is missing, deletes the Workflow.
 
+## Controller Specs
+- Detailed per-controller specifications:
+  - `docs/controllers/README.md`
+  - `docs/controllers/repository-controller.md`
+  - `docs/controllers/branch-controller.md`
+  - `docs/controllers/workflow-controller.md`
+
 ## Webhook (`internal/webhook/webhook.go`)
 - Handles GitHub push/PR events and requests a Repository sync.
 - Annotation update with optimistic retry:
@@ -48,7 +55,8 @@
 - Repository controller prunes non-default Branch CRs that disappear from GitHub; Branch controller deletes default-branch commit Branches after workflows finish.
 - Conflict handling: Repository annotation updates use `RetryOnConflict` in webhook.
 - Repository status no longer stores branch lists or commit queues; Branch CRs are the source of truth.
-- Sample manifests in `config/samples` include required spec fields; update `owner`, `repository`, `branch`, `sha`, and `template` values for your repo.
+- `config/samples/kustomization.yaml` includes user-authored resources (`Repository`, `WorkflowTemplate`) by default.
+- `Branch` and `Workflow` sample manifests are reference-only because they are controller-managed in normal operation.
 
 ## Useful Entry Points
 - CRDs: `api/v1alpha1/*_types.go`

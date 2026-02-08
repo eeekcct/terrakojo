@@ -1,3 +1,6 @@
+# Reference-only sample:
+# In normal operation Branch objects are created and garbage-collected by
+# RepositoryReconciler, not authored directly by users.
 apiVersion: terrakojo.io/v1alpha1
 kind: Branch
 metadata:
@@ -6,7 +9,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: branch-sample
 spec:
-  owner: "example"
+  owner: "eeekcct"
   repository: "terrakojo"
   name: "feature-auth"
   prNumber: 123

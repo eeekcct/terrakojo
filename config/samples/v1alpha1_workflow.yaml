@@ -1,3 +1,5 @@
+# Reference-only sample:
+# In normal operation Workflow objects are created by BranchReconciler.
 apiVersion: terrakojo.io/v1alpha1
 kind: Workflow
 metadata:
@@ -6,9 +8,10 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: workflow-sample
 spec:
-  owner: "example"
+  owner: "eeekcct"
   repository: "terrakojo"
-  branch: "feature-auth"
+  # Branch must reference Branch.metadata.name (resource name), not Git ref.
+  branch: "branch-sample"
   sha: "0123456789abcdef0123456789abcdef01234567"
   template: "workflowtemplate-sample"
-  path: "infra/main.tf"
+  path: "infra"
