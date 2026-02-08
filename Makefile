@@ -185,6 +185,8 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+# Server-side apply is the default to avoid CRD annotation size limits.
+# Override when needed, e.g. `make install KUBECTL_APPLY_FLAGS=`.
 KUBECTL_APPLY_FLAGS ?= --server-side=true
 
 ## Tool Versions

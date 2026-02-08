@@ -240,6 +240,30 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if err := r.Create(ctx, &job); err != nil {
+		log.Error(err, "Failed to create Job for Workflow",
+			"owner", owner,
+			"repository", repo,
+			"branch", branchRef,
+			"jobName", jobName,
+		)
+
+		failedStatus, failedConclusion := r.checkRunStatus(WorkflowPhaseFailed)
+		if updateErr := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, failedStatus, failedConclusion); updateErr != nil {
+			log.Error(updateErr, "Failed to mark GitHub CheckRun failed after Job creation failure",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"checkRunID", checkRunID,
+			)
+		}
+
+		if statusErr := r.updateWorkflowStatus(ctx, &workflow, WorkflowPhaseFailed); statusErr != nil && client.IgnoreNotFound(statusErr) != nil {
+			log.Error(statusErr, "Failed to update Workflow status after Job creation failure",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+			)
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -351,6 +375,8 @@ func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
 		}
 		if podSpec.SecurityContext.SeccompProfile == nil {
 			podSpec.SecurityContext.SeccompProfile = seccompProfile
+		} else if podSpec.SecurityContext.SeccompProfile.Type == "" {
+			podSpec.SecurityContext.SeccompProfile.Type = corev1.SeccompProfileTypeRuntimeDefault
 		}
 	}
 

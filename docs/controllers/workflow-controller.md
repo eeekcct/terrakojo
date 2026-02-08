@@ -86,7 +86,7 @@ corresponding GitHub Check Run status/conclusion.
 - Job pod hardening defaults:
   - `runAsNonRoot=true` (if unset)
   - `runAsUser=1000` (if unset)
-  - `seccompProfile=RuntimeDefault` (if unset)
+  - `seccompProfile=RuntimeDefault` (if unset, or if type is empty)
   - container `allowPrivilegeEscalation=false` (if unset)
   - container `capabilities.drop=["ALL"]` (if unset or empty)
 - Container names are passed through from `template.spec.job`; Kubernetes Job validation rejects invalid names.
@@ -110,6 +110,7 @@ corresponding GitHub Check Run status/conclusion.
 - Missing branch in normal path: workflow is deleted (best effort).
 - Check Run create/update failures: hard error.
 - Job create/get failures: hard error.
+- If Job creation fails after Check Run creation, controller best-effort updates Check Run to `completed/failure` and sets workflow phase to `Failed`, then returns the original error.
 - Status update failures: hard error unless explicitly treated as not-found race.
 - Template not found: treated as ignore-notfound (no error return).
 
