@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -37,23 +38,12 @@ type WorkflowTemplateSpec struct {
 	Match WorkflowMatch `json:"match"`
 
 	// +required
-	Steps []WorkflowStep `json:"steps"`
+	Job batchv1.JobSpec `json:"job"`
 }
 
 type WorkflowMatch struct {
 	// +required
 	Paths []string `json:"paths"`
-}
-
-type WorkflowStep struct {
-	// +required
-	Name string `json:"name"`
-
-	// +required
-	Image string `json:"image"`
-
-	// +required
-	Command []string `json:"command"`
 }
 
 // WorkflowTemplateStatus defines the observed state of WorkflowTemplate.

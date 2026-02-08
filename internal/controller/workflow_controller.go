@@ -19,12 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
@@ -200,54 +199,149 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err := r.Get(ctx, client.ObjectKey{Name: workflow.Spec.Template, Namespace: workflow.Namespace}, &template); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	checkRunName = fmt.Sprintf("%s(%s)", template.Spec.DisplayName, workflow.Spec.Path)
-
-	// Create CheckRun
-	checkRun, err := ghClient.CreateCheckRun(owner, repo, sha, checkRunName)
-	if err != nil {
-		log.Error(err, "Failed to create GitHub CheckRun for workflow",
-			"owner", owner,
-			"repository", repo,
-			"branch", branchRef,
-		)
-		return ctrl.Result{}, err
-	}
-	checkRunID = checkRun.GetID()
-	if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
-		latest.Status.CheckRunName = checkRunName
-		latest.Status.CheckRunID = int(checkRunID)
-	}); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			// Workflow was deleted, ignore this reconcile
-			log.Info("Workflow was deleted during reconcile, ignoring",
+	defaultCheckRunName := fmt.Sprintf("%s(%s)", template.Spec.DisplayName, workflow.Spec.Path)
+	if checkRunID == 0 {
+		checkRunName = defaultCheckRunName
+		// Create CheckRun
+		checkRun, err := ghClient.CreateCheckRun(owner, repo, sha, checkRunName)
+		if err != nil {
+			log.Error(err, "Failed to create GitHub CheckRun for workflow",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+			)
+			return ctrl.Result{}, err
+		}
+		checkRunID = checkRun.GetID()
+		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+			latest.Status.CheckRunName = checkRunName
+			latest.Status.CheckRunID = int(checkRunID)
+		}); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				// Workflow was deleted, ignore this reconcile
+				log.Info("Workflow was deleted during reconcile, ignoring",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"checkRunID", checkRunID)
+				return ctrl.Result{}, nil
+			}
+			log.Error(err, "Failed to update Workflow status with CheckRunID",
 				"owner", owner,
 				"repository", repo,
 				"branch", branchRef,
 				"checkRunID", checkRunID)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, err
 		}
-		log.Error(err, "Failed to update Workflow status with CheckRunID",
-			"owner", owner,
-			"repository", repo,
-			"branch", branchRef,
-			"checkRunID", checkRunID)
-		return ctrl.Result{}, err
+	} else if checkRunName == "" {
+		checkRunName = defaultCheckRunName
+		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+			if latest.Status.CheckRunName == "" {
+				latest.Status.CheckRunName = checkRunName
+			}
+		}); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				// Workflow was deleted, ignore this reconcile
+				log.Info("Workflow was deleted during reconcile, ignoring",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"checkRunID", checkRunID)
+				return ctrl.Result{}, nil
+			}
+			log.Error(err, "Failed to update Workflow status with default CheckRunName",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"checkRunID", checkRunID)
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Create Job from WorkflowTemplate
-	job = r.createJobFromTemplate(jobName, &template)
+	job = r.createJobFromTemplate(jobName, workflow.Namespace, &template)
 
 	if err := controllerutil.SetControllerReference(&workflow, &job, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	jobCreated := false
 	if err := r.Create(ctx, &job); err != nil {
-		return ctrl.Result{}, err
+		if apierrors.IsAlreadyExists(err) {
+			log.Info("Job already exists, re-fetching to continue reconcile",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"jobName", jobName,
+			)
+			if getErr := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: workflow.Namespace}, &job); getErr != nil {
+				if client.IgnoreNotFound(getErr) == nil {
+					return ctrl.Result{Requeue: true}, nil
+				}
+				return ctrl.Result{}, getErr
+			}
+			controllerRef := metav1.GetControllerOf(&job)
+			if controllerRef == nil || controllerRef.UID != workflow.UID {
+				ownershipErr := fmt.Errorf(
+					"existing Job %s/%s is not controlled by Workflow %s/%s",
+					job.Namespace, job.Name, workflow.Namespace, workflow.Name,
+				)
+				log.Error(ownershipErr, "Existing Job is not controlled by this Workflow; refusing to adopt",
+					"jobName", jobName,
+					"jobNamespace", job.Namespace,
+					"workflowName", workflow.Name,
+					"workflowNamespace", workflow.Namespace,
+				)
+				return ctrl.Result{}, ownershipErr
+			}
+		} else {
+			log.Error(err, "Failed to create Job for Workflow",
+				"owner", owner,
+				"repository", repo,
+				"branch", branchRef,
+				"jobName", jobName,
+			)
+
+			failedStatus, failedConclusion := r.checkRunStatus(WorkflowPhaseFailed)
+			if updateErr := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, failedStatus, failedConclusion); updateErr != nil {
+				log.Error(updateErr, "Failed to mark GitHub CheckRun failed after Job creation failure",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"checkRunID", checkRunID,
+				)
+			}
+
+			if statusErr := r.updateWorkflowStatus(ctx, &workflow, WorkflowPhaseFailed); statusErr != nil && client.IgnoreNotFound(statusErr) != nil {
+				log.Error(statusErr, "Failed to update Workflow status after Job creation failure",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+				)
+			}
+
+			if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
+				log.Info("Job creation failed with non-retriable error; workflow marked failed",
+					"owner", owner,
+					"repository", repo,
+					"branch", branchRef,
+					"jobName", jobName,
+				)
+				return ctrl.Result{}, nil
+			}
+
+			return ctrl.Result{}, err
+		}
+	} else {
+		jobCreated = true
 	}
 
-	log.Info("Created Job for Workflow", "jobName", job.Name)
+	if jobCreated {
+		log.Info("Created Job for Workflow", "jobName", job.Name)
+	} else {
+		log.Info("Using existing Job for Workflow", "jobName", job.Name)
+	}
 
-	workflow.Status.Jobs = append(workflow.Status.Jobs, job.Name)
 	phase, phaseChanged := r.determineWorkflowPhase(&workflow, &job)
 	status, conclusion := r.checkRunStatus(phase)
 	err = ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, status, conclusion)
@@ -311,89 +405,87 @@ func (r *WorkflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *WorkflowReconciler) createJobFromTemplate(jobName string, template *terrakojoiov1alpha1.WorkflowTemplate) batchv1.Job {
-	// for now, we execute first step only
-	step := template.Spec.Steps[0]
-
-	// Normalize container name to comply with RFC 1123
-	containerName := r.normalizeContainerName(step.Name)
-
-	backoffLimit := int32(0)
-	runAsNonRoot := true
-	runAsUser := int64(1000)
-	allowPrivilegeEscalation := false
-	seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+func (r *WorkflowReconciler) createJobFromTemplate(jobName, workflowNamespace string, template *terrakojoiov1alpha1.WorkflowTemplate) batchv1.Job {
+	jobSpec := template.Spec.Job.DeepCopy()
+	r.applyJobDefaults(jobSpec)
 
 	return batchv1.Job{
 		ObjectMeta: ctrl.ObjectMeta{
 			Name:      jobName,
-			Namespace: template.Namespace,
+			Namespace: workflowNamespace,
 		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoffLimit,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot:   &runAsNonRoot,
-						RunAsUser:      &runAsUser,
-						SeccompProfile: seccompProfile,
-					},
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{
-						{
-							Name:    containerName,
-							Image:   step.Image,
-							Command: step.Command,
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+		Spec: *jobSpec,
 	}
 }
 
-// normalizeContainerName converts a name to a valid Kubernetes container name
-// RFC 1123 compliance: lowercase alphanumeric characters or '-', start and end with alphanumeric
-func (r *WorkflowReconciler) normalizeContainerName(name string) string {
-	const kubeNameMaxLength = 63
-
-	// Convert to lowercase
-	normalized := strings.ToLower(name)
-
-	// Replace spaces and invalid characters with hyphens
-	normalized = regexp.MustCompile(`[^a-z0-9\-]+`).ReplaceAllString(normalized, "-")
-
-	// Remove leading/trailing hyphens
-	normalized = strings.Trim(normalized, "-")
-
-	// Ensure it starts with alphanumeric
-	if len(normalized) == 0 {
-		normalized = "step"
-	} else if !regexp.MustCompile(`^[a-z0-9]`).MatchString(normalized) {
-		normalized = "step-" + normalized
+func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {
+	backoffLimit := int32(0)
+	if jobSpec.BackoffLimit == nil {
+		jobSpec.BackoffLimit = &backoffLimit
 	}
 
-	// Ensure it ends with alphanumeric
-	if !regexp.MustCompile(`[a-z0-9]$`).MatchString(normalized) {
-		normalized = normalized + "-step"
+	podSpec := &jobSpec.Template.Spec
+	if podSpec.RestartPolicy == "" {
+		podSpec.RestartPolicy = corev1.RestartPolicyNever
 	}
 
-	// Ensure it does not exceed Kubernetes name limits
-	if len(normalized) > kubeNameMaxLength {
-		normalized = normalized[:kubeNameMaxLength]
-		normalized = strings.Trim(normalized, "-")
-		if len(normalized) == 0 {
-			normalized = "step"
+	runAsNonRoot := true
+	runAsUser := int64(1000)
+	seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	if podSpec.SecurityContext == nil {
+		podSpec.SecurityContext = &corev1.PodSecurityContext{
+			RunAsNonRoot:   &runAsNonRoot,
+			RunAsUser:      &runAsUser,
+			SeccompProfile: seccompProfile,
+		}
+	} else {
+		if podSpec.SecurityContext.RunAsNonRoot == nil {
+			podSpec.SecurityContext.RunAsNonRoot = &runAsNonRoot
+		}
+		if podSpec.SecurityContext.RunAsUser == nil {
+			podSpec.SecurityContext.RunAsUser = &runAsUser
+		}
+		if podSpec.SecurityContext.SeccompProfile == nil {
+			podSpec.SecurityContext.SeccompProfile = seccompProfile
+		} else if podSpec.SecurityContext.SeccompProfile.Type == "" {
+			podSpec.SecurityContext.SeccompProfile.Type = corev1.SeccompProfileTypeRuntimeDefault
 		}
 	}
 
-	return normalized
+	allowPrivilegeEscalation := false
+	boolPtr := func(v bool) *bool {
+		value := v
+		return &value
+	}
+	hardenContainerSecurityContext := func(securityContext **corev1.SecurityContext) {
+		if *securityContext == nil {
+			*securityContext = &corev1.SecurityContext{
+				AllowPrivilegeEscalation: boolPtr(allowPrivilegeEscalation),
+				Capabilities: &corev1.Capabilities{
+					Drop: []corev1.Capability{"ALL"},
+				},
+			}
+			return
+		}
+		if (*securityContext).AllowPrivilegeEscalation == nil {
+			(*securityContext).AllowPrivilegeEscalation = boolPtr(allowPrivilegeEscalation)
+		}
+		if (*securityContext).Capabilities == nil {
+			(*securityContext).Capabilities = &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			}
+			return
+		}
+		if len((*securityContext).Capabilities.Drop) == 0 {
+			(*securityContext).Capabilities.Drop = []corev1.Capability{"ALL"}
+		}
+	}
+	for i := range podSpec.Containers {
+		hardenContainerSecurityContext(&podSpec.Containers[i].SecurityContext)
+	}
+	for i := range podSpec.InitContainers {
+		hardenContainerSecurityContext(&podSpec.InitContainers[i].SecurityContext)
+	}
 }
 
 func (r *WorkflowReconciler) determineWorkflowPhase(workflow *terrakojoiov1alpha1.Workflow, job *batchv1.Job) (WorkflowPhase, bool) {

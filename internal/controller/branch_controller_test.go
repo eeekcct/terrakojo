@@ -26,6 +26,7 @@ import (
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -117,6 +118,23 @@ func newBranchFakeClient(testScheme *runtime.Scheme, objs ...client.Object) clie
 		builder.WithObjects(objs...)
 	}
 	return builder.Build()
+}
+
+func newBranchTemplateJobSpec(containerName, image string, command []string) batchv1.JobSpec {
+	return batchv1.JobSpec{
+		Template: corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				RestartPolicy: corev1.RestartPolicyNever,
+				Containers: []corev1.Container{
+					{
+						Name:    containerName,
+						Image:   image,
+						Command: command,
+					},
+				},
+			},
+		},
+	}
 }
 
 func newErrorTestBranch() *terrakojoiov1alpha1.Branch {
@@ -503,13 +521,7 @@ var _ = Describe("Branch Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"infrastructure/**/*.tf"},
 					},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{
-							Name:    "plan",
-							Image:   "hashicorp/terraform:latest",
-							Command: []string{"echo", "Planning..."},
-						},
-					},
+					Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 				},
 			}
 			mdTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
@@ -522,13 +534,7 @@ var _ = Describe("Branch Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"**/*.md"},
 					},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{
-							Name:    "lint",
-							Image:   "markdownlint/markdownlint:latest",
-							Command: []string{"echo", "Linting..."},
-						},
-					},
+					Job: newBranchTemplateJobSpec("lint", "markdownlint/markdownlint:latest", []string{"echo", "Linting..."}),
 				},
 			}
 
@@ -617,13 +623,7 @@ var _ = Describe("Branch Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"infrastructure/**/*.tf"},
 					},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{
-							Name:    "plan",
-							Image:   "hashicorp/terraform:latest",
-							Command: []string{"echo", "Planning..."},
-						},
-					},
+					Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 				},
 			}
 			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
@@ -704,13 +704,7 @@ var _ = Describe("Branch Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"infrastructure/**/*.tf"},
 					},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{
-							Name:    "plan",
-							Image:   "hashicorp/terraform:latest",
-							Command: []string{"echo", "Planning..."},
-						},
-					},
+					Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 				},
 			}
 			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
@@ -863,13 +857,7 @@ var _ = Describe("Branch Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"infrastructure/**/*.tf"},
 					},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{
-							Name:    "plan",
-							Image:   "hashicorp/terraform:latest",
-							Command: []string{"echo", "Planning..."},
-						},
-					},
+					Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 				},
 			}
 			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
@@ -911,13 +899,7 @@ var _ = Describe("Branch Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"**/*.md"},
 					},
-					Steps: []terrakojoiov1alpha1.WorkflowStep{
-						{
-							Name:    "lint",
-							Image:   "markdownlint/markdownlint:latest",
-							Command: []string{"echo", "Linting..."},
-						},
-					},
+					Job: newBranchTemplateJobSpec("lint", "markdownlint/markdownlint:latest", []string{"echo", "Linting..."}),
 				},
 			}
 			repo := repoForBranch(branch)
@@ -1235,13 +1217,7 @@ var _ = Describe("Branch Controller", func() {
 						Match: terrakojoiov1alpha1.WorkflowMatch{
 							Paths: []string{"infrastructure/**/*.tf"},
 						},
-						Steps: []terrakojoiov1alpha1.WorkflowStep{
-							{
-								Name:    "plan",
-								Image:   "hashicorp/terraform:latest",
-								Command: []string{"echo", "Planning..."},
-							},
-						},
+						Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 					},
 				}
 				baseClient := newBranchFakeClient(testScheme, branch, repo, template)
@@ -1275,13 +1251,7 @@ var _ = Describe("Branch Controller", func() {
 						Match: terrakojoiov1alpha1.WorkflowMatch{
 							Paths: []string{"dir/*.tf"},
 						},
-						Steps: []terrakojoiov1alpha1.WorkflowStep{
-							{
-								Name:    "plan",
-								Image:   "hashicorp/terraform:latest",
-								Command: []string{"echo", "Planning..."},
-							},
-						},
+						Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 					},
 				}
 				baseClient := newBranchFakeClient(testScheme, branch, repo, template)
@@ -1315,13 +1285,7 @@ var _ = Describe("Branch Controller", func() {
 						Match: terrakojoiov1alpha1.WorkflowMatch{
 							Paths: []string{"dir/*.tf"},
 						},
-						Steps: []terrakojoiov1alpha1.WorkflowStep{
-							{
-								Name:    "plan",
-								Image:   "hashicorp/terraform:latest",
-								Command: []string{"echo", "Planning..."},
-							},
-						},
+						Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 					},
 				}
 				baseClient := newBranchFakeClient(testScheme, branch, repo, template)
@@ -1355,13 +1319,7 @@ var _ = Describe("Branch Controller", func() {
 						Match: terrakojoiov1alpha1.WorkflowMatch{
 							Paths: []string{"dir/*.tf"},
 						},
-						Steps: []terrakojoiov1alpha1.WorkflowStep{
-							{
-								Name:    "plan",
-								Image:   "hashicorp/terraform:latest",
-								Command: []string{"echo", "Planning..."},
-							},
-						},
+						Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
 					},
 				}
 				baseClient := newBranchFakeClient(testScheme, branch, repo, template)

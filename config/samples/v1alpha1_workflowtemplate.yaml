@@ -10,9 +10,13 @@ spec:
   match:
     paths:
       - "**/*.tf"
-  steps:
-    - name: "Build Step"
-      image: "busybox:latest"
-      command:
-        - "echo"
-        - "Hello from Terrakojo!"
+  job:
+    template:
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: "build-step"
+            image: "busybox:latest"
+            command:
+              - "echo"
+              - "Hello from Terrakojo!"

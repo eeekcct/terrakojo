@@ -70,20 +70,26 @@ corresponding GitHub Check Run status/conclusion.
 - build check run name: `<template.displayName>(<workflow.spec.path>)`.
 - create GitHub Check Run (queued).
 - persist `status.checkRunID` and `status.checkRunName` using conflict-retry update.
-- create Job from the first template step only.
+- create Job from `template.spec.job`.
 - set workflow as controller owner of the Job.
 - create Job.
 - compute phase for new Job object and update Check Run/status accordingly.
 
 ## Job Construction Rules
-- Only `template.spec.steps[0]` is executed.
+- `template.spec.job` is copied into the created Job spec.
+- Job metadata is controller-assigned:
+  - `metadata.name = workflow.name`
+  - `metadata.namespace = workflow.namespace`
+- If fields are omitted in `spec.job`, the controller applies secure defaults:
+  - `backoffLimit = 0`
+  - `restartPolicy = Never`
 - Job pod hardening defaults:
-- `runAsNonRoot=true`
-- `runAsUser=1000`
-- `seccompProfile=RuntimeDefault`
-- container `allowPrivilegeEscalation=false`
-- container drops all capabilities.
-- Container name is normalized to RFC1123-like constraints (lowercase, alnum/hyphen, max 63).
+  - `runAsNonRoot=true` (if unset)
+  - `runAsUser=1000` (if unset)
+  - `seccompProfile=RuntimeDefault` (if unset, or if type is empty)
+  - `containers[]` and `initContainers[]`: `allowPrivilegeEscalation=false` (if unset)
+  - `containers[]` and `initContainers[]`: `capabilities.drop=["ALL"]` (if unset or empty)
+- Container names are passed through from `template.spec.job`; Kubernetes Job validation rejects invalid names.
 
 ## Check Run Mapping
 - `Pending` -> `queued` (no conclusion)
@@ -97,13 +103,19 @@ corresponding GitHub Check Run status/conclusion.
 - Deterministic Job naming (workflow name) prevents duplicate concurrent jobs for one workflow.
 - Status writes use retry-on-conflict to tolerate concurrent updates.
 - If workflow is deleted between check-run creation and status write, not-found is ignored to avoid reconcile loops.
+- When `status.checkRunID` is already set, reconcile reuses that CheckRun instead of creating a new one.
+- When `status.checkRunID` is set but `status.checkRunName` is empty, reconcile rebuilds the default name and persists it before CheckRun updates.
+- If Job create returns `AlreadyExists`, reconcile treats it as a race, re-fetches the Job, and continues.
+- For `AlreadyExists` races, the re-fetched Job must be controlled by the same Workflow UID; otherwise reconcile fails with ownership mismatch.
 
 ## Failure Handling
 - Missing `GitHubClientManager`: hard error.
 - Branch lookup failure (non-notfound): hard error.
 - Missing branch in normal path: workflow is deleted (best effort).
 - Check Run create/update failures: hard error.
-- Job create/get failures: hard error.
+- Job create/get failures: hard error (except Job creation errors classified as Kubernetes `Invalid` or `Forbidden`, which are treated as terminal success).
+- If Job creation fails after Check Run creation, controller best-effort updates Check Run to `completed/failure` and sets workflow phase to `Failed`.
+- Job creation errors classified as Kubernetes `Invalid` or `Forbidden` are treated as terminal and return success (`nil`) to avoid retry loops and duplicate CheckRuns.
 - Status update failures: hard error unless explicitly treated as not-found race.
 - Template not found: treated as ignore-notfound (no error return).
 
@@ -126,7 +138,8 @@ Important log events:
 ## Operational Notes
 - Check Run identity (`status.checkRunID`) is the authoritative link for later updates.
 - Workflow status conflict handling is implemented with `RetryOnConflict`.
-- The controller uses `status.phase` for lifecycle control; `status.jobs` is not used in control decisions.
+- The controller uses `status.phase` for lifecycle control.
+- `status.jobs` is a legacy compatibility field; the controller neither uses it for control decisions nor actively maintains it.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/workflow_controller_test.go`
@@ -147,6 +160,5 @@ Covered scenarios:
   - job create and owner-reference errors.
 
 Known coverage gaps:
-- limited dedicated assertions for generated Job security-context fields.
+- no end-to-end assertion for user-specified `spec.job` security overrides.
 - no explicit scenario validating repeated steady-state reconciles with unchanged running job status.
-
