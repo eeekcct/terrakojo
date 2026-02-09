@@ -2178,7 +2178,7 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(allowB).NotTo(BeIdenticalTo(allowInit))
 		})
 
-		It("injectReservedRuntimeEnv sets optional values and omits TF mode", func() {
+		It("injectReservedRuntimeEnv keeps runtime parameter env vars empty when parameters are absent", func() {
 			reconciler := &WorkflowReconciler{}
 			jobSpec := batchv1.JobSpec{
 				Template: corev1.PodTemplateSpec{
@@ -2234,8 +2234,8 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv("TERRAKOJO_OWNER", "owner")
 			expectEnv("TERRAKOJO_WORKFLOW_PATH", "")
 			expectEnv("TERRAKOJO_PR_NUMBER", "")
-			expectEnv("TERRAKOJO_EXECUTION_UNIT", "folder")
-			expectEnv("TERRAKOJO_IS_DEFAULT_BRANCH", "false")
+			expectEnv("TERRAKOJO_EXECUTION_UNIT", "")
+			expectEnv("TERRAKOJO_IS_DEFAULT_BRANCH", "")
 			_, tfModeExists := getEnv(jobSpec.Template.Spec.Containers[0].Env, "TERRAKOJO_TF_MODE")
 			Expect(tfModeExists).To(BeFalse())
 		})
@@ -2281,7 +2281,7 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(executionUnitValue).To(Equal("file"))
 		})
 
-		It("injectReservedRuntimeEnv falls back to false for invalid isDefaultBranch parameter", func() {
+		It("injectReservedRuntimeEnv passes through runtime parameter values", func() {
 			reconciler := &WorkflowReconciler{}
 			jobSpec := batchv1.JobSpec{
 				Template: corev1.PodTemplateSpec{
@@ -2299,8 +2299,8 @@ var _ = Describe("Workflow Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 					Template:   "template",
 					Parameters: map[string]string{
-						"isDefaultBranch": "invalid",
-						"executionUnit":   "invalid",
+						"isDefaultBranch": "true",
+						"executionUnit":   "repository",
 					},
 				},
 			}
@@ -2318,8 +2318,8 @@ var _ = Describe("Workflow Controller", func() {
 					executionUnitValue = env.Value
 				}
 			}
-			Expect(isDefaultBranchValue).To(Equal("false"))
-			Expect(executionUnitValue).To(Equal("folder"))
+			Expect(isDefaultBranchValue).To(Equal("true"))
+			Expect(executionUnitValue).To(Equal("repository"))
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {

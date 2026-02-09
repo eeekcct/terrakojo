@@ -59,8 +59,6 @@ const (
 	workflowFinalizer = "terrakojo.io/cleanup-checkrun"
 
 	checkRunStatusCompleted = "completed"
-	envBoolTrue             = "true"
-	envBoolFalse            = "false"
 )
 
 // WorkflowReconciler reconciles a Workflow object
@@ -443,25 +441,8 @@ func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakoj
 		prNumber = fmt.Sprintf("%d", branch.Spec.PRNumber)
 	}
 
-	executionUnit := string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder)
-	isDefaultBranch := envBoolFalse
-	if workflow.Spec.Parameters != nil {
-		switch workflow.Spec.Parameters[workflowParamExecutionUnit] {
-		case string(terrakojoiov1alpha1.WorkflowExecutionUnitRepository):
-			executionUnit = string(terrakojoiov1alpha1.WorkflowExecutionUnitRepository)
-		case string(terrakojoiov1alpha1.WorkflowExecutionUnitFile):
-			executionUnit = string(terrakojoiov1alpha1.WorkflowExecutionUnitFile)
-		case string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder):
-			executionUnit = string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder)
-		}
-
-		switch workflow.Spec.Parameters[workflowParamIsDefaultBranch] {
-		case envBoolTrue:
-			isDefaultBranch = envBoolTrue
-		case envBoolFalse:
-			isDefaultBranch = envBoolFalse
-		}
-	}
+	executionUnit := workflow.Spec.Parameters[workflowParamExecutionUnit]
+	isDefaultBranch := workflow.Spec.Parameters[workflowParamIsDefaultBranch]
 
 	return []corev1.EnvVar{
 		{Name: "TERRAKOJO_OWNER", Value: workflow.Spec.Owner},

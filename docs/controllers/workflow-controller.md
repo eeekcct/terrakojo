@@ -106,11 +106,11 @@ corresponding GitHub Check Run status/conclusion.
   - `TERRAKOJO_EXECUTION_UNIT`
   - `TERRAKOJO_IS_DEFAULT_BRANCH`
 - `TERRAKOJO_EXECUTION_UNIT` is derived from `spec.parameters["executionUnit"]`:
-  - `"folder"`, `"repository"`, or `"file"` is honored.
-  - missing/invalid values fall back to `"folder"`.
+  - the value is passed through as-is.
+  - if the parameter is missing, the env var is injected as an empty string.
 - `TERRAKOJO_IS_DEFAULT_BRANCH` is derived from `spec.parameters["isDefaultBranch"]`:
-  - `"true"` or `"false"` is honored.
-  - missing/invalid values fall back to `"false"`.
+  - the value is passed through as-is.
+  - if the parameter is missing, the env var is injected as an empty string.
 
 ## Check Run Mapping
 - `Pending` -> `queued` (no conclusion)
