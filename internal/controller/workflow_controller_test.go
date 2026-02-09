@@ -540,6 +540,9 @@ var _ = Describe("Workflow Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 					Template:   "template",
 					Path:       "infra/path",
+					Parameters: map[string]string{
+						"isDefaultBranch": "false",
+					},
 				},
 			}
 			branch := &terrakojoiov1alpha1.Branch{
@@ -576,6 +579,7 @@ var _ = Describe("Workflow Controller", func() {
 										Env: []corev1.EnvVar{
 											{Name: "CUSTOM_ENV", Value: "keep"},
 											{Name: "TERRAKOJO_REF_NAME", Value: "wrong"},
+											{Name: "TERRAKOJO_IS_DEFAULT_BRANCH", Value: "true"},
 										},
 									},
 								},
@@ -585,6 +589,7 @@ var _ = Describe("Workflow Controller", func() {
 										Image: "busybox",
 										Env: []corev1.EnvVar{
 											{Name: "TERRAKOJO_OWNER", Value: "wrong-owner"},
+											{Name: "TERRAKOJO_IS_DEFAULT_BRANCH", Value: "true"},
 										},
 									},
 								},
@@ -658,11 +663,13 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv(containerEnv, "TERRAKOJO_BRANCH_RESOURCE", workflow.Spec.Branch)
 			expectEnv(containerEnv, "TERRAKOJO_REF_NAME", "feature/context")
 			expectEnv(containerEnv, "TERRAKOJO_PR_NUMBER", "123")
+			expectEnv(containerEnv, "TERRAKOJO_IS_DEFAULT_BRANCH", "false")
 			expectNoEnv(containerEnv, "TERRAKOJO_TF_MODE")
 
 			expectEnv(initEnv, "TERRAKOJO_OWNER", "owner")
 			expectEnv(initEnv, "TERRAKOJO_REF_NAME", "feature/context")
 			expectEnv(initEnv, "TERRAKOJO_PR_NUMBER", "123")
+			expectEnv(initEnv, "TERRAKOJO_IS_DEFAULT_BRANCH", "false")
 
 			updated := &terrakojoiov1alpha1.Workflow{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
@@ -2222,8 +2229,75 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv("TERRAKOJO_OWNER", "owner")
 			expectEnv("TERRAKOJO_WORKFLOW_PATH", "")
 			expectEnv("TERRAKOJO_PR_NUMBER", "")
+			expectEnv("TERRAKOJO_IS_DEFAULT_BRANCH", "false")
 			_, tfModeExists := getEnv(jobSpec.Template.Spec.Containers[0].Env, "TERRAKOJO_TF_MODE")
 			Expect(tfModeExists).To(BeFalse())
+		})
+
+		It("injectReservedRuntimeEnv uses isDefaultBranch parameter when true", func() {
+			reconciler := &WorkflowReconciler{}
+			jobSpec := batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "main"}},
+					},
+				},
+			}
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "workflow", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-cr",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+					Parameters: map[string]string{"isDefaultBranch": "true"},
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{Spec: terrakojoiov1alpha1.BranchSpec{Name: "main"}}
+
+			reconciler.injectReservedRuntimeEnv(&jobSpec, workflow, branch)
+
+			var value string
+			for _, env := range jobSpec.Template.Spec.Containers[0].Env {
+				if env.Name == "TERRAKOJO_IS_DEFAULT_BRANCH" {
+					value = env.Value
+				}
+			}
+			Expect(value).To(Equal("true"))
+		})
+
+		It("injectReservedRuntimeEnv falls back to false for invalid isDefaultBranch parameter", func() {
+			reconciler := &WorkflowReconciler{}
+			jobSpec := batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "main"}},
+					},
+				},
+			}
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "workflow", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-cr",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+					Parameters: map[string]string{"isDefaultBranch": "invalid"},
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{Spec: terrakojoiov1alpha1.BranchSpec{Name: "feature"}}
+
+			reconciler.injectReservedRuntimeEnv(&jobSpec, workflow, branch)
+
+			var value string
+			for _, env := range jobSpec.Template.Spec.Containers[0].Env {
+				if env.Name == "TERRAKOJO_IS_DEFAULT_BRANCH" {
+					value = env.Value
+				}
+			}
+			Expect(value).To(Equal("false"))
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {

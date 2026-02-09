@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -261,7 +262,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			continue
 		}
 		for _, folder := range folders {
-			createdName, err := r.createWorkflowForBranch(ctx, &branch, templateName, fmt.Sprintf("%s-", templateName), folder)
+			createdName, err := r.createWorkflowForBranch(ctx, &branch, templateName, fmt.Sprintf("%s-", templateName), folder, isDefaultBranch)
 			if err != nil {
 				log.Error(err, "Failed to create Workflow for Branch")
 				return ctrl.Result{}, err
@@ -353,7 +354,14 @@ func (r *BranchReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *terrakojoiov1alpha1.Branch, templateName, workflowGenerateName, workflowPath string) (string, error) {
+func (r *BranchReconciler) createWorkflowForBranch(
+	ctx context.Context,
+	branch *terrakojoiov1alpha1.Branch,
+	templateName,
+	workflowGenerateName,
+	workflowPath string,
+	isDefaultBranch bool,
+) (string, error) {
 	workflow := &terrakojoiov1alpha1.Workflow{
 		ObjectMeta: ctrl.ObjectMeta{
 			GenerateName: workflowGenerateName,
@@ -369,6 +377,9 @@ func (r *BranchReconciler) createWorkflowForBranch(ctx context.Context, branch *
 			SHA:        branch.Spec.SHA,
 			Template:   templateName,
 			Path:       workflowPath,
+			Parameters: map[string]string{
+				"isDefaultBranch": strconv.FormatBool(isDefaultBranch),
+			},
 		},
 	}
 	if err := controllerutil.SetControllerReference(branch, workflow, r.Scheme); err != nil {
