@@ -26,8 +26,8 @@ corresponding GitHub Check Run status/conclusion.
 - `spec.sha`
 - `spec.template`
 - `spec.path`
-- `spec.parameters["isDefaultBranch"]` (optional; `"true"`/`"false"`, default handling below)
-- `spec.parameters["executionUnit"]` (optional; `"folder"`/`"repository"`/`"file"`, default handling below)
+- `spec.parameters["isDefaultBranch"]` (optional string; passed through to env as-is; empty string if absent; typically `"true"`/`"false"`)
+- `spec.parameters["executionUnit"]` (optional string; passed through to env as-is; empty string if absent; commonly `"folder"`/`"repository"`/`"file"`)
 - Workflow status fields used:
 - `status.checkRunID`
 - `status.checkRunName`

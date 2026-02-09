@@ -2281,7 +2281,7 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(executionUnitValue).To(Equal("file"))
 		})
 
-		It("injectReservedRuntimeEnv passes through runtime parameter values", func() {
+		It("injectReservedRuntimeEnv passes through non-canonical runtime parameter values", func() {
 			reconciler := &WorkflowReconciler{}
 			jobSpec := batchv1.JobSpec{
 				Template: corev1.PodTemplateSpec{
@@ -2299,8 +2299,8 @@ var _ = Describe("Workflow Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 					Template:   "template",
 					Parameters: map[string]string{
-						"isDefaultBranch": "true",
-						"executionUnit":   "repository",
+						"isDefaultBranch": "not-a-bool",
+						"executionUnit":   "weird",
 					},
 				},
 			}
@@ -2318,8 +2318,8 @@ var _ = Describe("Workflow Controller", func() {
 					executionUnitValue = env.Value
 				}
 			}
-			Expect(isDefaultBranchValue).To(Equal("true"))
-			Expect(executionUnitValue).To(Equal("repository"))
+			Expect(isDefaultBranchValue).To(Equal("not-a-bool"))
+			Expect(executionUnitValue).To(Equal("weird"))
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {

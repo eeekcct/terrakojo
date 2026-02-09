@@ -45,11 +45,6 @@ type BranchReconciler struct {
 
 const branchFinalizer = "terrakojo.io/cleanup-workflows"
 
-const (
-	workflowParamIsDefaultBranch = "isDefaultBranch"
-	workflowParamExecutionUnit   = "executionUnit"
-)
-
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/finalizers,verbs=update
@@ -262,7 +257,13 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	workflowNames := []string{}
-	for templateName, group := range groups {
+	templateNames := make([]string, 0, len(groups))
+	for templateName := range groups {
+		templateNames = append(templateNames, templateName)
+	}
+	sort.Strings(templateNames)
+	for _, templateName := range templateNames {
+		group := groups[templateName]
 		targets := workflowTargets(group.match.ExecutionUnit, group.files)
 		if len(targets) == 0 {
 			continue
