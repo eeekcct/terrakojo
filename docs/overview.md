@@ -4,7 +4,7 @@
 - **Repository**: spec `{owner,name,type,defaultBranch,githubSecretRef{name[,namespace]}}`; status `conditions`, `synced`, `lastDefaultBranchHeadSha` (default-branch sync cursor).
 - **Branch**: spec `{owner,repository,name,sha,prNumber?}`; status `conditions`, `workflows[]`, `changedFiles[]`.
 - **Workflow**: spec `{owner,repository,branch,sha,template,path?,parameters?}`; status `conditions`, `phase`, `jobs[]` (legacy/compatibility field; not actively maintained), `checkRunID`, `checkRunName`.
-  - Controller-managed parameter key: `parameters.isDefaultBranch` (`"true"`/`"false"`).
+  - Controller-managed parameter key: `spec.parameters["isDefaultBranch"]` (`"true"`/`"false"`).
 - **WorkflowTemplate**: spec `{displayName, match.paths[], job}`.
 
 ## Controllers
@@ -20,7 +20,7 @@
   - Finalizer `terrakojo.io/cleanup-workflows`; on deletion removes owned Workflows first.
   - SHA unchanged (annotation `terrakojo.io/last-sha`) → no-op; SHA change → delete existing Workflows.
   - Fetches changed files for PR via GitHub client; matches WorkflowTemplates; creates Workflows per template & folder.
-  - Propagates default-branch context into each created Workflow as `spec.parameters.isDefaultBranch`.
+  - Propagates default-branch context into each created Workflow as `spec.parameters["isDefaultBranch"]`.
   - **Completion cleanup**: when all owned Workflows are terminal (Succeeded/Failed/Cancelled), deletes the Branch only for default-branch commits; non-default branches are kept until GitHub no longer lists them.
   - Uses field index `metadata.ownerReferences.uid` for Workflow lookup.
 
