@@ -26,6 +26,8 @@ for default and non-default branches.
 - `spec.prNumber` (switches changed-files API)
 - Branch annotation used:
 - `terrakojo.io/last-sha`
+- Workflow parameter key written by this controller:
+- `spec.parameters["isDefaultBranch"]` (`"true"` when `branch.spec.name == repo.spec.defaultBranch`, otherwise `"false"`).
 - Required dependency:
 - `GitHubClientManager` (`GetClientForBranch` must succeed).
 - Required related resources:
@@ -74,6 +76,7 @@ for default and non-default branches.
 - group matched files by folder (`path.Dir`);
 - create one `Workflow` per folder;
 - `Workflow.Spec.Path` is set to that folder.
+- each created Workflow gets `spec.parameters["isDefaultBranch"]` as a snapshot of the branch classification at creation time.
 1. Update branch annotation `terrakojo.io/last-sha = spec.sha`.
 1. Update branch status:
 - `status.workflows` (created workflow names),
@@ -121,6 +124,7 @@ Important log events:
 - For non-default branches, "no change" and "no matching template" still advance `terrakojo.io/last-sha`.
 - For default branch commit branches, no-op branches are aggressively removed.
 - Folder fan-out can produce many workflows for a single branch SHA if many directories changed.
+- `spec.parameters["isDefaultBranch"]` is a creation-time snapshot; existing Workflows are not mutated if repository default branch config changes later.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/branch_controller_test.go`
@@ -141,4 +145,3 @@ Covered scenarios:
 Known coverage gaps:
 - limited assertions on ordering/determinism of generated workflow list when multiple templates and folders match.
 - no dedicated assertion that large template sets maintain acceptable reconcile latency.
-

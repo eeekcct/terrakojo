@@ -580,6 +580,7 @@ var _ = Describe("Branch Controller", func() {
 					g.Expect(wf.Spec.Branch).To(Equal(branch.Name))
 					g.Expect(wf.Spec.Owner).To(Equal(branch.Spec.Owner))
 					g.Expect(wf.Spec.Repository).To(Equal(branch.Spec.Repository))
+					g.Expect(wf.Spec.Parameters).To(HaveKeyWithValue("isDefaultBranch", "false"))
 					g.Expect(wf.Spec.Template).To(SatisfyAny(
 						Equal(tfTemplateName),
 						Equal(mdTemplateName),
@@ -1431,8 +1432,39 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
-			_, err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow", "path")
+			_, err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow", "path", false)
 			Expect(err).To(HaveOccurred())
+		})
+
+		It("createWorkflowForBranch sets isDefaultBranch parameter", func() {
+			testScheme := newBranchTestScheme()
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-default-param",
+					Namespace: "default",
+					UID:       types.UID("branch-default-param"),
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Name:       "main",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+				},
+			}
+
+			reconciler := &BranchReconciler{
+				Client: newBranchFakeClient(testScheme, branch),
+				Scheme: testScheme,
+			}
+
+			createdName, err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow-", "path", true)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(createdName).NotTo(BeEmpty())
+
+			var workflows terrakojoiov1alpha1.WorkflowList
+			Expect(reconciler.List(context.Background(), &workflows, client.InNamespace(branch.Namespace))).To(Succeed())
+			Expect(workflows.Items).To(HaveLen(1))
+			Expect(workflows.Items[0].Spec.Parameters).To(HaveKeyWithValue("isDefaultBranch", "true"))
 		})
 	})
 })
