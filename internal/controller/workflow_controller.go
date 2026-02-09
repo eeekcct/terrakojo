@@ -260,6 +260,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Create Job from WorkflowTemplate
 	job = r.createJobFromTemplate(jobName, workflow.Namespace, &template)
+	r.injectReservedRuntimeEnv(&job.Spec, &workflow, &branch)
 
 	if err := controllerutil.SetControllerReference(&workflow, &job, r.Scheme); err != nil {
 		return ctrl.Result{}, err
@@ -416,6 +417,59 @@ func (r *WorkflowReconciler) createJobFromTemplate(jobName, workflowNamespace st
 		},
 		Spec: *jobSpec,
 	}
+}
+
+func (r *WorkflowReconciler) injectReservedRuntimeEnv(
+	jobSpec *batchv1.JobSpec,
+	workflow *terrakojoiov1alpha1.Workflow,
+	branch *terrakojoiov1alpha1.Branch,
+) {
+	reserved := reservedRuntimeEnv(workflow, branch)
+	podSpec := &jobSpec.Template.Spec
+
+	for i := range podSpec.Containers {
+		podSpec.Containers[i].Env = mergeEnvWithReserved(podSpec.Containers[i].Env, reserved)
+	}
+	for i := range podSpec.InitContainers {
+		podSpec.InitContainers[i].Env = mergeEnvWithReserved(podSpec.InitContainers[i].Env, reserved)
+	}
+}
+
+func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakojoiov1alpha1.Branch) []corev1.EnvVar {
+	prNumber := ""
+	if branch.Spec.PRNumber != 0 {
+		prNumber = fmt.Sprintf("%d", branch.Spec.PRNumber)
+	}
+
+	return []corev1.EnvVar{
+		{Name: "TERRAKOJO_OWNER", Value: workflow.Spec.Owner},
+		{Name: "TERRAKOJO_REPOSITORY", Value: workflow.Spec.Repository},
+		{Name: "TERRAKOJO_WORKFLOW_NAME", Value: workflow.Name},
+		{Name: "TERRAKOJO_WORKFLOW_NAMESPACE", Value: workflow.Namespace},
+		{Name: "TERRAKOJO_WORKFLOW_TEMPLATE", Value: workflow.Spec.Template},
+		{Name: "TERRAKOJO_WORKFLOW_PATH", Value: workflow.Spec.Path},
+		{Name: "TERRAKOJO_SHA", Value: workflow.Spec.SHA},
+		{Name: "TERRAKOJO_BRANCH_RESOURCE", Value: workflow.Spec.Branch},
+		{Name: "TERRAKOJO_REF_NAME", Value: branch.Spec.Name},
+		{Name: "TERRAKOJO_PR_NUMBER", Value: prNumber},
+	}
+}
+
+func mergeEnvWithReserved(existing, reserved []corev1.EnvVar) []corev1.EnvVar {
+	reservedNames := make(map[string]struct{}, len(reserved))
+	for _, env := range reserved {
+		reservedNames[env.Name] = struct{}{}
+	}
+
+	merged := make([]corev1.EnvVar, 0, len(existing)+len(reserved))
+	for _, env := range existing {
+		if _, exists := reservedNames[env.Name]; exists {
+			continue
+		}
+		merged = append(merged, env)
+	}
+	merged = append(merged, reserved...)
+	return merged
 }
 
 func (r *WorkflowReconciler) applyJobDefaults(jobSpec *batchv1.JobSpec) {

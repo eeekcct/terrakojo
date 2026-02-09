@@ -550,7 +550,8 @@ var _ = Describe("Workflow Controller", func() {
 				Spec: terrakojoiov1alpha1.BranchSpec{
 					Owner:      workflow.Spec.Owner,
 					Repository: workflow.Spec.Repository,
-					Name:       "feature",
+					Name:       "feature/context",
+					PRNumber:   123,
 					SHA:        workflow.Spec.SHA,
 				},
 			}
@@ -564,7 +565,32 @@ var _ = Describe("Workflow Controller", func() {
 					Match: terrakojoiov1alpha1.WorkflowMatch{
 						Paths: []string{"**/*"},
 					},
-					Job: newTemplateJobSpec("plan-step", []string{"echo", "hello"}),
+					Job: batchv1.JobSpec{
+						Template: corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{
+										Name:    "plan-step",
+										Image:   "busybox",
+										Command: []string{"echo", "hello"},
+										Env: []corev1.EnvVar{
+											{Name: "CUSTOM_ENV", Value: "keep"},
+											{Name: "TERRAKOJO_REF_NAME", Value: "wrong"},
+										},
+									},
+								},
+								InitContainers: []corev1.Container{
+									{
+										Name:  "init-step",
+										Image: "busybox",
+										Env: []corev1.EnvVar{
+											{Name: "TERRAKOJO_OWNER", Value: "wrong-owner"},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			}
 
@@ -598,6 +624,45 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(job.Spec.Template.Spec.Containers[0].Name).To(Equal("plan-step"))
 			Expect(job.Spec.BackoffLimit).NotTo(BeNil())
 			Expect(*job.Spec.BackoffLimit).To(Equal(int32(0)))
+			Expect(job.Spec.Template.Spec.InitContainers).To(HaveLen(1))
+
+			getEnv := func(envs []corev1.EnvVar, name string) (string, bool) {
+				for _, env := range envs {
+					if env.Name == name {
+						return env.Value, true
+					}
+				}
+				return "", false
+			}
+			expectEnv := func(envs []corev1.EnvVar, name, value string) {
+				actual, ok := getEnv(envs, name)
+				Expect(ok).To(BeTrue(), "missing env %s", name)
+				Expect(actual).To(Equal(value), "unexpected value for env %s", name)
+			}
+			expectNoEnv := func(envs []corev1.EnvVar, name string) {
+				_, ok := getEnv(envs, name)
+				Expect(ok).To(BeFalse(), "env should not be set: %s", name)
+			}
+
+			containerEnv := job.Spec.Template.Spec.Containers[0].Env
+			initEnv := job.Spec.Template.Spec.InitContainers[0].Env
+
+			expectEnv(containerEnv, "CUSTOM_ENV", "keep")
+			expectEnv(containerEnv, "TERRAKOJO_OWNER", "owner")
+			expectEnv(containerEnv, "TERRAKOJO_REPOSITORY", "repo")
+			expectEnv(containerEnv, "TERRAKOJO_WORKFLOW_NAME", workflow.Name)
+			expectEnv(containerEnv, "TERRAKOJO_WORKFLOW_NAMESPACE", workflow.Namespace)
+			expectEnv(containerEnv, "TERRAKOJO_WORKFLOW_TEMPLATE", workflow.Spec.Template)
+			expectEnv(containerEnv, "TERRAKOJO_WORKFLOW_PATH", workflow.Spec.Path)
+			expectEnv(containerEnv, "TERRAKOJO_SHA", workflow.Spec.SHA)
+			expectEnv(containerEnv, "TERRAKOJO_BRANCH_RESOURCE", workflow.Spec.Branch)
+			expectEnv(containerEnv, "TERRAKOJO_REF_NAME", "feature/context")
+			expectEnv(containerEnv, "TERRAKOJO_PR_NUMBER", "123")
+			expectNoEnv(containerEnv, "TERRAKOJO_TF_MODE")
+
+			expectEnv(initEnv, "TERRAKOJO_OWNER", "owner")
+			expectEnv(initEnv, "TERRAKOJO_REF_NAME", "feature/context")
+			expectEnv(initEnv, "TERRAKOJO_PR_NUMBER", "123")
 
 			updated := &terrakojoiov1alpha1.Workflow{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
@@ -2099,6 +2164,66 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(allowA).NotTo(BeIdenticalTo(allowB))
 			Expect(allowA).NotTo(BeIdenticalTo(allowInit))
 			Expect(allowB).NotTo(BeIdenticalTo(allowInit))
+		})
+
+		It("injectReservedRuntimeEnv sets optional values and omits TF mode", func() {
+			reconciler := &WorkflowReconciler{}
+			jobSpec := batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name: "main",
+								Env: []corev1.EnvVar{
+									{Name: "USER_DEFINED", Value: "keep"},
+									{Name: "TERRAKOJO_OWNER", Value: "wrong"},
+								},
+							},
+						},
+					},
+				},
+			}
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "workflow",
+					Namespace: "default",
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-cr",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Name: "feature/no-pr",
+				},
+			}
+
+			reconciler.injectReservedRuntimeEnv(&jobSpec, workflow, branch)
+
+			getEnv := func(envs []corev1.EnvVar, name string) (string, bool) {
+				for _, env := range envs {
+					if env.Name == name {
+						return env.Value, true
+					}
+				}
+				return "", false
+			}
+			expectEnv := func(name, value string) {
+				actual, ok := getEnv(jobSpec.Template.Spec.Containers[0].Env, name)
+				Expect(ok).To(BeTrue(), "missing env %s", name)
+				Expect(actual).To(Equal(value), "unexpected value for env %s", name)
+			}
+
+			expectEnv("USER_DEFINED", "keep")
+			expectEnv("TERRAKOJO_OWNER", "owner")
+			expectEnv("TERRAKOJO_WORKFLOW_PATH", "")
+			expectEnv("TERRAKOJO_PR_NUMBER", "")
+			_, tfModeExists := getEnv(jobSpec.Template.Spec.Containers[0].Env, "TERRAKOJO_TF_MODE")
+			Expect(tfModeExists).To(BeFalse())
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {
