@@ -59,6 +59,8 @@ const (
 	workflowFinalizer = "terrakojo.io/cleanup-checkrun"
 
 	checkRunStatusCompleted = "completed"
+	envBoolTrue             = "true"
+	envBoolFalse            = "false"
 )
 
 // WorkflowReconciler reconciles a Workflow object
@@ -440,13 +442,13 @@ func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakoj
 	if branch.Spec.PRNumber != 0 {
 		prNumber = fmt.Sprintf("%d", branch.Spec.PRNumber)
 	}
-	isDefaultBranch := "false"
+	isDefaultBranch := envBoolFalse
 	if workflow.Spec.Parameters != nil {
 		switch workflow.Spec.Parameters["isDefaultBranch"] {
-		case "true":
-			isDefaultBranch = "true"
-		case "false":
-			isDefaultBranch = "false"
+		case envBoolTrue:
+			isDefaultBranch = envBoolTrue
+		case envBoolFalse:
+			isDefaultBranch = envBoolFalse
 		}
 	}
 

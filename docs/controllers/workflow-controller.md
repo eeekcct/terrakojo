@@ -26,6 +26,7 @@ corresponding GitHub Check Run status/conclusion.
 - `spec.sha`
 - `spec.template`
 - `spec.path`
+- `spec.parameters["isDefaultBranch"]` (optional; `"true"`/`"false"`, default handling below)
 - Workflow status fields used:
 - `status.checkRunID`
 - `status.checkRunName`
@@ -90,6 +91,21 @@ corresponding GitHub Check Run status/conclusion.
   - `containers[]` and `initContainers[]`: `allowPrivilegeEscalation=false` (if unset)
   - `containers[]` and `initContainers[]`: `capabilities.drop=["ALL"]` (if unset or empty)
 - Container names are passed through from `template.spec.job`; Kubernetes Job validation rejects invalid names.
+- Reserved runtime env vars are injected into all containers and initContainers (overriding same-name template env entries):
+  - `TERRAKOJO_OWNER`
+  - `TERRAKOJO_REPOSITORY`
+  - `TERRAKOJO_WORKFLOW_NAME`
+  - `TERRAKOJO_WORKFLOW_NAMESPACE`
+  - `TERRAKOJO_WORKFLOW_TEMPLATE`
+  - `TERRAKOJO_WORKFLOW_PATH`
+  - `TERRAKOJO_SHA`
+  - `TERRAKOJO_BRANCH_RESOURCE`
+  - `TERRAKOJO_REF_NAME`
+  - `TERRAKOJO_PR_NUMBER`
+  - `TERRAKOJO_IS_DEFAULT_BRANCH`
+- `TERRAKOJO_IS_DEFAULT_BRANCH` is derived from `spec.parameters["isDefaultBranch"]`:
+  - `"true"` or `"false"` is honored.
+  - missing/invalid values fall back to `"false"`.
 
 ## Check Run Mapping
 - `Pending` -> `queued` (no conclusion)
@@ -140,6 +156,7 @@ Important log events:
 - Workflow status conflict handling is implemented with `RetryOnConflict`.
 - The controller uses `status.phase` for lifecycle control.
 - `status.jobs` is a legacy compatibility field; the controller neither uses it for control decisions nor actively maintains it.
+- Default-branch context for job scripts should be read from `TERRAKOJO_IS_DEFAULT_BRANCH` instead of hard-coding branch names.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/workflow_controller_test.go`
