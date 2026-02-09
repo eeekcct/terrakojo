@@ -1632,5 +1632,23 @@ var _ = Describe("Branch Controller", func() {
 			Expect(workflows.Items[0].Spec.Parameters).To(HaveKeyWithValue("isDefaultBranch", "true"))
 			Expect(workflows.Items[0].Spec.Parameters).To(HaveKeyWithValue("executionUnit", "repository"))
 		})
+
+		It("workflowTargets falls back to folder semantics for invalid executionUnit", func() {
+			targets := workflowTargets(
+				terrakojoiov1alpha1.WorkflowExecutionUnit("weird"),
+				[]string{
+					"infrastructure/app/main.tf",
+					"infrastructure/db/variables.tf",
+					"infrastructure/db/variables.tf",
+					"README.md",
+				},
+			)
+
+			Expect(targets).To(HaveLen(2))
+			Expect(targets[0].path).To(Equal("infrastructure/app"))
+			Expect(targets[0].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
+			Expect(targets[1].path).To(Equal("infrastructure/db"))
+			Expect(targets[1].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
+		})
 	})
 })
