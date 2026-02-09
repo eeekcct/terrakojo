@@ -44,7 +44,23 @@ type WorkflowTemplateSpec struct {
 type WorkflowMatch struct {
 	// +required
 	Paths []string `json:"paths"`
+
+	// ExecutionUnit controls how workflows are generated from matched files.
+	// - folder: one Workflow per matched folder (current default behavior)
+	// - repository: one Workflow for the repository
+	// - file: one Workflow per matched file
+	// +optional
+	// +kubebuilder:validation:Enum=folder;repository;file
+	ExecutionUnit WorkflowExecutionUnit `json:"executionUnit,omitempty"`
 }
+
+type WorkflowExecutionUnit string
+
+const (
+	WorkflowExecutionUnitFolder     WorkflowExecutionUnit = "folder"
+	WorkflowExecutionUnitRepository WorkflowExecutionUnit = "repository"
+	WorkflowExecutionUnitFile       WorkflowExecutionUnit = "file"
+)
 
 // WorkflowTemplateStatus defines the observed state of WorkflowTemplate.
 type WorkflowTemplateStatus struct {
@@ -74,6 +90,7 @@ type WorkflowTemplateStatus struct {
 // +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 57",message="metadata.name must be 57 characters or less so derived Workflow names (GenerateName + suffix) remain <= 63"
 // +kubebuilder:printcolumn:name="DisplayName",type=string,JSONPath=`.spec.displayName`
 // +kubebuilder:printcolumn:name="Paths",type=string,JSONPath=`.spec.match.paths`
+// +kubebuilder:printcolumn:name="Unit",type=string,JSONPath=`.spec.match.executionUnit`,priority=1
 
 // WorkflowTemplate is the Schema for the workflowtemplates API
 type WorkflowTemplate struct {

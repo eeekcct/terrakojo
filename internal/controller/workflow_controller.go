@@ -442,9 +442,20 @@ func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakoj
 	if branch.Spec.PRNumber != 0 {
 		prNumber = fmt.Sprintf("%d", branch.Spec.PRNumber)
 	}
+
+	executionUnit := string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder)
 	isDefaultBranch := envBoolFalse
 	if workflow.Spec.Parameters != nil {
-		switch workflow.Spec.Parameters["isDefaultBranch"] {
+		switch workflow.Spec.Parameters[workflowParamExecutionUnit] {
+		case string(terrakojoiov1alpha1.WorkflowExecutionUnitRepository):
+			executionUnit = string(terrakojoiov1alpha1.WorkflowExecutionUnitRepository)
+		case string(terrakojoiov1alpha1.WorkflowExecutionUnitFile):
+			executionUnit = string(terrakojoiov1alpha1.WorkflowExecutionUnitFile)
+		case string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder):
+			executionUnit = string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder)
+		}
+
+		switch workflow.Spec.Parameters[workflowParamIsDefaultBranch] {
 		case envBoolTrue:
 			isDefaultBranch = envBoolTrue
 		case envBoolFalse:
@@ -463,6 +474,7 @@ func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakoj
 		{Name: "TERRAKOJO_BRANCH_RESOURCE", Value: workflow.Spec.Branch},
 		{Name: "TERRAKOJO_REF_NAME", Value: branch.Spec.Name},
 		{Name: "TERRAKOJO_PR_NUMBER", Value: prNumber},
+		{Name: "TERRAKOJO_EXECUTION_UNIT", Value: executionUnit},
 		{Name: "TERRAKOJO_IS_DEFAULT_BRANCH", Value: isDefaultBranch},
 	}
 }

@@ -542,6 +542,7 @@ var _ = Describe("Workflow Controller", func() {
 					Path:       "infra/path",
 					Parameters: map[string]string{
 						"isDefaultBranch": "false",
+						"executionUnit":   "repository",
 					},
 				},
 			}
@@ -579,6 +580,7 @@ var _ = Describe("Workflow Controller", func() {
 										Env: []corev1.EnvVar{
 											{Name: "CUSTOM_ENV", Value: "keep"},
 											{Name: "TERRAKOJO_REF_NAME", Value: "wrong"},
+											{Name: "TERRAKOJO_EXECUTION_UNIT", Value: "wrong"},
 											{Name: "TERRAKOJO_IS_DEFAULT_BRANCH", Value: "true"},
 										},
 									},
@@ -589,6 +591,7 @@ var _ = Describe("Workflow Controller", func() {
 										Image: "busybox",
 										Env: []corev1.EnvVar{
 											{Name: "TERRAKOJO_OWNER", Value: "wrong-owner"},
+											{Name: "TERRAKOJO_EXECUTION_UNIT", Value: "wrong"},
 											{Name: "TERRAKOJO_IS_DEFAULT_BRANCH", Value: "true"},
 										},
 									},
@@ -663,12 +666,14 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv(containerEnv, "TERRAKOJO_BRANCH_RESOURCE", workflow.Spec.Branch)
 			expectEnv(containerEnv, "TERRAKOJO_REF_NAME", "feature/context")
 			expectEnv(containerEnv, "TERRAKOJO_PR_NUMBER", "123")
+			expectEnv(containerEnv, "TERRAKOJO_EXECUTION_UNIT", "repository")
 			expectEnv(containerEnv, "TERRAKOJO_IS_DEFAULT_BRANCH", "false")
 			expectNoEnv(containerEnv, "TERRAKOJO_TF_MODE")
 
 			expectEnv(initEnv, "TERRAKOJO_OWNER", "owner")
 			expectEnv(initEnv, "TERRAKOJO_REF_NAME", "feature/context")
 			expectEnv(initEnv, "TERRAKOJO_PR_NUMBER", "123")
+			expectEnv(initEnv, "TERRAKOJO_EXECUTION_UNIT", "repository")
 			expectEnv(initEnv, "TERRAKOJO_IS_DEFAULT_BRANCH", "false")
 
 			updated := &terrakojoiov1alpha1.Workflow{}
@@ -2229,6 +2234,7 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv("TERRAKOJO_OWNER", "owner")
 			expectEnv("TERRAKOJO_WORKFLOW_PATH", "")
 			expectEnv("TERRAKOJO_PR_NUMBER", "")
+			expectEnv("TERRAKOJO_EXECUTION_UNIT", "folder")
 			expectEnv("TERRAKOJO_IS_DEFAULT_BRANCH", "false")
 			_, tfModeExists := getEnv(jobSpec.Template.Spec.Containers[0].Env, "TERRAKOJO_TF_MODE")
 			Expect(tfModeExists).To(BeFalse())
@@ -2251,20 +2257,28 @@ var _ = Describe("Workflow Controller", func() {
 					Branch:     "branch-cr",
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 					Template:   "template",
-					Parameters: map[string]string{"isDefaultBranch": "true"},
+					Parameters: map[string]string{
+						"isDefaultBranch": "true",
+						"executionUnit":   "file",
+					},
 				},
 			}
 			branch := &terrakojoiov1alpha1.Branch{Spec: terrakojoiov1alpha1.BranchSpec{Name: "main"}}
 
 			reconciler.injectReservedRuntimeEnv(&jobSpec, workflow, branch)
 
-			var value string
+			var isDefaultBranchValue string
+			var executionUnitValue string
 			for _, env := range jobSpec.Template.Spec.Containers[0].Env {
 				if env.Name == "TERRAKOJO_IS_DEFAULT_BRANCH" {
-					value = env.Value
+					isDefaultBranchValue = env.Value
+				}
+				if env.Name == "TERRAKOJO_EXECUTION_UNIT" {
+					executionUnitValue = env.Value
 				}
 			}
-			Expect(value).To(Equal("true"))
+			Expect(isDefaultBranchValue).To(Equal("true"))
+			Expect(executionUnitValue).To(Equal("file"))
 		})
 
 		It("injectReservedRuntimeEnv falls back to false for invalid isDefaultBranch parameter", func() {
@@ -2284,20 +2298,28 @@ var _ = Describe("Workflow Controller", func() {
 					Branch:     "branch-cr",
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 					Template:   "template",
-					Parameters: map[string]string{"isDefaultBranch": "invalid"},
+					Parameters: map[string]string{
+						"isDefaultBranch": "invalid",
+						"executionUnit":   "invalid",
+					},
 				},
 			}
 			branch := &terrakojoiov1alpha1.Branch{Spec: terrakojoiov1alpha1.BranchSpec{Name: "feature"}}
 
 			reconciler.injectReservedRuntimeEnv(&jobSpec, workflow, branch)
 
-			var value string
+			var isDefaultBranchValue string
+			var executionUnitValue string
 			for _, env := range jobSpec.Template.Spec.Containers[0].Env {
 				if env.Name == "TERRAKOJO_IS_DEFAULT_BRANCH" {
-					value = env.Value
+					isDefaultBranchValue = env.Value
+				}
+				if env.Name == "TERRAKOJO_EXECUTION_UNIT" {
+					executionUnitValue = env.Value
 				}
 			}
-			Expect(value).To(Equal("false"))
+			Expect(isDefaultBranchValue).To(Equal("false"))
+			Expect(executionUnitValue).To(Equal("folder"))
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {

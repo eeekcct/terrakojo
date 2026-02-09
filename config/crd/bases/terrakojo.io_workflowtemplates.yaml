@@ -21,6 +21,10 @@ spec:
     - jsonPath: .spec.match.paths
       name: Paths
       type: string
+    - jsonPath: .spec.match.executionUnit
+      name: Unit
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -8895,6 +8899,17 @@ spec:
                 type: object
               match:
                 properties:
+                  executionUnit:
+                    description: |-
+                      ExecutionUnit controls how workflows are generated from matched files.
+                      - folder: one Workflow per matched folder (current default behavior)
+                      - repository: one Workflow for the repository
+                      - file: one Workflow per matched file
+                    enum:
+                    - folder
+                    - repository
+                    - file
+                    type: string
                   paths:
                     items:
                       type: string

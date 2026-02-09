@@ -28,6 +28,7 @@ for default and non-default branches.
 - `terrakojo.io/last-sha`
 - Workflow parameter key written by this controller:
 - `spec.parameters["isDefaultBranch"]` (`"true"` when `branch.spec.name == repo.spec.defaultBranch`, otherwise `"false"`).
+- `spec.parameters["executionUnit"]` (`"folder"`/`"repository"`/`"file"`) from `WorkflowTemplate.spec.match.executionUnit` with fallback to `"folder"`.
 - Required dependency:
 - `GitHubClientManager` (`GetClientForBranch` must succeed).
 - Required related resources:
@@ -73,10 +74,13 @@ for default and non-default branches.
 - default branch: delete branch;
 - non-default branch: update `terrakojo.io/last-sha` and keep.
 1. For each matched template:
-- group matched files by folder (`path.Dir`);
-- create one `Workflow` per folder;
-- `Workflow.Spec.Path` is set to that folder.
-- each created Workflow gets `spec.parameters["isDefaultBranch"]` as a snapshot of the branch classification at creation time.
+- decide targets from `WorkflowTemplate.spec.match.executionUnit`:
+  - `folder` (default): group matched files by folder (`path.Dir`) and create one `Workflow` per folder.
+  - `repository`: create one `Workflow` with `Workflow.Spec.Path = "."`.
+  - `file`: create one `Workflow` per matched file path.
+- each created Workflow gets:
+  - `spec.parameters["isDefaultBranch"]` as a snapshot of branch classification at creation time.
+  - `spec.parameters["executionUnit"]` as a normalized snapshot (`folder|repository|file`).
 1. Update branch annotation `terrakojo.io/last-sha = spec.sha`.
 1. Update branch status:
 - `status.workflows` (created workflow names),
@@ -85,8 +89,11 @@ for default and non-default branches.
 
 ## Template Matching and Workflow Fan-out
 - Matching uses `WorkflowTemplate.spec.match.paths` against changed files.
-- A template may create multiple workflows when multiple folders match.
-- Files at repository root (`path.Dir(file) == "."`) are ignored by folder split and do not create workflows.
+- Fan-out shape depends on `WorkflowTemplate.spec.match.executionUnit`:
+  - `folder`: a template may create multiple workflows when multiple folders match.
+  - `repository`: exactly one workflow is created with path `"."`.
+  - `file`: one workflow is created per unique matched file path.
+- In `folder` mode, files at repository root (`path.Dir(file) == "."`) are ignored by folder split and do not create workflows.
 - Workflow `GenerateName` is `<template-name>-`.
 
 ## State and Idempotency
@@ -123,8 +130,11 @@ Important log events:
 ## Operational Notes
 - For non-default branches, "no change" and "no matching template" still advance `terrakojo.io/last-sha`.
 - For default branch commit branches, no-op branches are aggressively removed.
-- Folder fan-out can produce many workflows for a single branch SHA if many directories changed.
-- `spec.parameters["isDefaultBranch"]` is a creation-time snapshot; existing Workflows are not mutated if repository default branch config changes later.
+- `executionUnit` changes fan-out cardinality:
+  - `folder`: many workflows per changed directory set.
+  - `file`: many workflows per changed file set.
+  - `repository`: one workflow regardless of changed file count.
+- `spec.parameters["isDefaultBranch"]` and `spec.parameters["executionUnit"]` are creation-time snapshots; existing Workflows are not mutated if repository/template config changes later.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/branch_controller_test.go`

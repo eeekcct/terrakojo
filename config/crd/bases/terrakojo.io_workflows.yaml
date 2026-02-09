@@ -154,8 +154,10 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               jobs:
-                description: Jobs contains the list of Job names created for this
-                  workflow
+                description: |-
+                  Jobs is a legacy/compatibility field.
+                  Current controller logic does not read this field for reconciliation
+                  decisions and does not actively maintain it.
                 items:
                   type: string
                 type: array
