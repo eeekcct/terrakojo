@@ -4,8 +4,10 @@
 - **Repository**: spec `{owner,name,type,defaultBranch,githubSecretRef{name[,namespace]}}`; status `conditions`, `synced`, `lastDefaultBranchHeadSha` (default-branch sync cursor).
 - **Branch**: spec `{owner,repository,name,sha,prNumber?}`; status `conditions`, `workflows[]`, `changedFiles[]`.
 - **Workflow**: spec `{owner,repository,branch,sha,template,path?,parameters?}`; status `conditions`, `phase`, `jobs[]` (legacy/compatibility field; not actively maintained), `checkRunID`, `checkRunName`.
-  - Controller-managed parameter key: `spec.parameters["isDefaultBranch"]` (`"true"`/`"false"`).
-- **WorkflowTemplate**: spec `{displayName, match.paths[], job}`.
+  - Controller-managed parameter keys:
+    - `spec.parameters["isDefaultBranch"]` (`"true"`/`"false"`).
+    - `spec.parameters["executionUnit"]` (`"folder"|"repository"|"file"`).
+- **WorkflowTemplate**: spec `{displayName, match.paths[], match.executionUnit?, job}`.
 
 ## Controllers
 - **RepositoryReconciler** (`internal/controller/repository_controller.go`)
@@ -19,14 +21,17 @@
 - **BranchReconciler** (`internal/controller/branch_controller.go`)
   - Finalizer `terrakojo.io/cleanup-workflows`; on deletion removes owned Workflows first.
   - SHA unchanged (annotation `terrakojo.io/last-sha`) → no-op; SHA change → delete existing Workflows.
-  - Fetches changed files for PR via GitHub client; matches WorkflowTemplates; creates Workflows per template & folder.
-  - Propagates default-branch context into each created Workflow as `spec.parameters["isDefaultBranch"]`.
+  - Fetches changed files for PR via GitHub client; matches WorkflowTemplates; creates Workflows per template and `executionUnit`:
+    - `folder` (default): one Workflow per matched folder.
+    - `repository`: one Workflow with path `"."`.
+    - `file`: one Workflow per matched file path.
+  - Propagates default-branch context and execution unit into each created Workflow as `spec.parameters["isDefaultBranch"]` and `spec.parameters["executionUnit"]`.
   - **Completion cleanup**: when all owned Workflows are terminal (Succeeded/Failed/Cancelled), deletes the Branch only for default-branch commits; non-default branches are kept until GitHub no longer lists them.
   - Uses field index `metadata.ownerReferences.uid` for Workflow lookup.
 
 - **WorkflowReconciler** (`internal/controller/workflow_controller.go`)
   - Creates GitHub CheckRun and a Job from `WorkflowTemplate.spec.job`.
-  - Injects reserved runtime env vars into all Job containers/initContainers (`TERRAKOJO_*`, including `TERRAKOJO_IS_DEFAULT_BRANCH`).
+  - Injects reserved runtime env vars into all Job containers/initContainers (`TERRAKOJO_*`, including `TERRAKOJO_IS_DEFAULT_BRANCH` and `TERRAKOJO_EXECUTION_UNIT`).
   - Maps Job status → Workflow `phase` and updates CheckRun.
   - Finalizer cancels CheckRun on deletion if Job not finished; if owning Branch is missing, deletes the Workflow.
 

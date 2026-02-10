@@ -26,7 +26,8 @@ corresponding GitHub Check Run status/conclusion.
 - `spec.sha`
 - `spec.template`
 - `spec.path`
-- `spec.parameters["isDefaultBranch"]` (optional; `"true"`/`"false"`, default handling below)
+- `spec.parameters["isDefaultBranch"]` (optional string; passed through to env as-is; empty string if absent; typically `"true"`/`"false"`)
+- `spec.parameters["executionUnit"]` (optional string; passed through to env as-is; empty string if absent; commonly `"folder"`/`"repository"`/`"file"`)
 - Workflow status fields used:
 - `status.checkRunID`
 - `status.checkRunName`
@@ -102,10 +103,14 @@ corresponding GitHub Check Run status/conclusion.
   - `TERRAKOJO_BRANCH_RESOURCE`
   - `TERRAKOJO_REF_NAME`
   - `TERRAKOJO_PR_NUMBER`
+  - `TERRAKOJO_EXECUTION_UNIT`
   - `TERRAKOJO_IS_DEFAULT_BRANCH`
+- `TERRAKOJO_EXECUTION_UNIT` is derived from `spec.parameters["executionUnit"]`:
+  - the value is passed through as-is.
+  - if the parameter is missing, the env var is injected as an empty string.
 - `TERRAKOJO_IS_DEFAULT_BRANCH` is derived from `spec.parameters["isDefaultBranch"]`:
-  - `"true"` or `"false"` is honored.
-  - missing/invalid values fall back to `"false"`.
+  - the value is passed through as-is.
+  - if the parameter is missing, the env var is injected as an empty string.
 
 ## Check Run Mapping
 - `Pending` -> `queued` (no conclusion)
@@ -157,6 +162,7 @@ Important log events:
 - The controller uses `status.phase` for lifecycle control.
 - `status.jobs` is a legacy compatibility field; the controller neither uses it for control decisions nor actively maintains it.
 - Default-branch context for job scripts should be read from `TERRAKOJO_IS_DEFAULT_BRANCH` instead of hard-coding branch names.
+- Workflow unit context for job scripts should be read from `TERRAKOJO_EXECUTION_UNIT`.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/workflow_controller_test.go`

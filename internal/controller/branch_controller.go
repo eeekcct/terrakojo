@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"sort"
 	"strconv"
 	"time"
 
@@ -256,13 +257,27 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	workflowNames := []string{}
-	for templateName, files := range groups {
-		folders := splitFolderLevel(files)
-		if len(folders) == 0 {
+	templateNames := make([]string, 0, len(groups))
+	for templateName := range groups {
+		templateNames = append(templateNames, templateName)
+	}
+	sort.Strings(templateNames)
+	for _, templateName := range templateNames {
+		group := groups[templateName]
+		targets := workflowTargets(group.match.ExecutionUnit, group.files)
+		if len(targets) == 0 {
 			continue
 		}
-		for _, folder := range folders {
-			createdName, err := r.createWorkflowForBranch(ctx, &branch, templateName, fmt.Sprintf("%s-", templateName), folder, isDefaultBranch)
+		for _, target := range targets {
+			createdName, err := r.createWorkflowForBranch(
+				ctx,
+				&branch,
+				templateName,
+				fmt.Sprintf("%s-", templateName),
+				target.path,
+				isDefaultBranch,
+				target.executionUnit,
+			)
 			if err != nil {
 				log.Error(err, "Failed to create Workflow for Branch")
 				return ctrl.Result{}, err
@@ -361,7 +376,9 @@ func (r *BranchReconciler) createWorkflowForBranch(
 	workflowGenerateName,
 	workflowPath string,
 	isDefaultBranch bool,
+	executionUnit terrakojoiov1alpha1.WorkflowExecutionUnit,
 ) (string, error) {
+	executionUnit = normalizeExecutionUnit(executionUnit)
 	workflow := &terrakojoiov1alpha1.Workflow{
 		ObjectMeta: ctrl.ObjectMeta{
 			GenerateName: workflowGenerateName,
@@ -378,7 +395,8 @@ func (r *BranchReconciler) createWorkflowForBranch(
 			Template:   templateName,
 			Path:       workflowPath,
 			Parameters: map[string]string{
-				"isDefaultBranch": strconv.FormatBool(isDefaultBranch),
+				workflowParamIsDefaultBranch: strconv.FormatBool(isDefaultBranch),
+				workflowParamExecutionUnit:   string(executionUnit),
 			},
 		},
 	}
@@ -413,12 +431,25 @@ func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch 
 	return nil
 }
 
-func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedFiles []string) map[string][]string {
-	groups := map[string][]string{}
+type matchedTemplate struct {
+	match terrakojoiov1alpha1.WorkflowMatch
+	files []string
+}
+
+type workflowTarget struct {
+	path          string
+	executionUnit terrakojoiov1alpha1.WorkflowExecutionUnit
+}
+
+func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedFiles []string) map[string]matchedTemplate {
+	groups := map[string]matchedTemplate{}
 	for _, t := range templates.Items {
 		files := matchTemplate(t.Spec.Match, changedFiles)
 		if len(files) > 0 {
-			groups[t.Name] = files
+			groups[t.Name] = matchedTemplate{
+				match: t.Spec.Match,
+				files: files,
+			}
 		}
 	}
 	return groups
@@ -449,7 +480,66 @@ func splitFolderLevel(files []string) []string {
 	for folder := range folderSet {
 		folders = append(folders, folder)
 	}
+	sort.Strings(folders)
 	return folders
+}
+
+func normalizeExecutionUnit(unit terrakojoiov1alpha1.WorkflowExecutionUnit) terrakojoiov1alpha1.WorkflowExecutionUnit {
+	switch unit {
+	case terrakojoiov1alpha1.WorkflowExecutionUnitRepository:
+		return terrakojoiov1alpha1.WorkflowExecutionUnitRepository
+	case terrakojoiov1alpha1.WorkflowExecutionUnitFile:
+		return terrakojoiov1alpha1.WorkflowExecutionUnitFile
+	default:
+		return terrakojoiov1alpha1.WorkflowExecutionUnitFolder
+	}
+}
+
+func workflowTargets(unit terrakojoiov1alpha1.WorkflowExecutionUnit, files []string) []workflowTarget {
+	normalized := normalizeExecutionUnit(unit)
+
+	switch normalized {
+	case terrakojoiov1alpha1.WorkflowExecutionUnitRepository:
+		return []workflowTarget{
+			{
+				path:          ".",
+				executionUnit: normalized,
+			},
+		}
+	case terrakojoiov1alpha1.WorkflowExecutionUnitFile:
+		uniqueFiles := uniqueSortedStrings(files)
+		targets := make([]workflowTarget, 0, len(uniqueFiles))
+		for _, file := range uniqueFiles {
+			targets = append(targets, workflowTarget{
+				path:          file,
+				executionUnit: normalized,
+			})
+		}
+		return targets
+	default:
+		folders := splitFolderLevel(files)
+		targets := make([]workflowTarget, 0, len(folders))
+		for _, folder := range folders {
+			targets = append(targets, workflowTarget{
+				path:          folder,
+				executionUnit: normalized,
+			})
+		}
+		return targets
+	}
+}
+
+func uniqueSortedStrings(values []string) []string {
+	set := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		set[v] = struct{}{}
+	}
+	unique := make([]string, 0, len(set))
+	for v := range set {
+		unique = append(unique, v)
+	}
+	sort.Strings(unique)
+	return unique
 }
 
 // listWorkflowsForBranch returns workflows owned by the branch using the UID field index.

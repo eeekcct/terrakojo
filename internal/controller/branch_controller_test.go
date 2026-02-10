@@ -581,6 +581,7 @@ var _ = Describe("Branch Controller", func() {
 					g.Expect(wf.Spec.Owner).To(Equal(branch.Spec.Owner))
 					g.Expect(wf.Spec.Repository).To(Equal(branch.Spec.Repository))
 					g.Expect(wf.Spec.Parameters).To(HaveKeyWithValue("isDefaultBranch", "false"))
+					g.Expect(wf.Spec.Parameters).To(HaveKeyWithValue("executionUnit", "folder"))
 					g.Expect(wf.Spec.Template).To(SatisfyAny(
 						Equal(tfTemplateName),
 						Equal(mdTemplateName),
@@ -592,6 +593,154 @@ var _ = Describe("Branch Controller", func() {
 						g.Expect(wf.Spec.Path).To(Equal("docs"))
 					}
 				}
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+		})
+
+		It("creates one Workflow per repository when executionUnit is repository", func() {
+			ghManager.GetClientForBranchFunc = func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+						return []string{"infrastructure/app/main.tf", "infrastructure/db/variables.tf"}, nil
+					},
+				}, nil
+			}
+
+			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			templateName := uniqueName("repo-workflow-template")
+			branchName := uniqueName("branch-repo-unit")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
+
+			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      templateName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "repo-unit",
+					Match: terrakojoiov1alpha1.WorkflowMatch{
+						Paths:         []string{"infrastructure/**/*.tf"},
+						ExecutionUnit: terrakojoiov1alpha1.WorkflowExecutionUnitRepository,
+					},
+					Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
+				},
+			}
+			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
+
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      branchName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Repository: repoName,
+					Owner:      owner,
+					Name:       "feature/repo-unit",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+				},
+			}
+			attachRepositoryOwnerReference(branch, repo)
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+
+			workflowList := &terrakojoiov1alpha1.WorkflowList{}
+			Eventually(func(g Gomega) {
+				fetchedBranch := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetchedBranch)).To(Succeed())
+				g.Expect(k8sClient.List(
+					ctx,
+					workflowList,
+					client.InNamespace(namespace),
+					client.MatchingLabels{"terrakojo.io/owner-uid": string(fetchedBranch.UID)},
+				)).To(Succeed())
+				g.Expect(workflowList.Items).To(HaveLen(1))
+
+				wf := workflowList.Items[0]
+				g.Expect(wf.Spec.Path).To(Equal("."))
+				g.Expect(wf.Spec.Template).To(Equal(templateName))
+				g.Expect(wf.Spec.Parameters).To(HaveKeyWithValue("executionUnit", "repository"))
+				g.Expect(wf.Spec.Parameters).To(HaveKeyWithValue("isDefaultBranch", "false"))
+			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
+		})
+
+		It("creates one Workflow per file when executionUnit is file", func() {
+			ghManager.GetClientForBranchFunc = func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+				return &fakeGitHubClient{
+					GetChangedFilesForCommitFunc: func(owner, repo, sha string) ([]string, error) {
+						return []string{
+							"infrastructure/app/main.tf",
+							"infrastructure/db/variables.tf",
+							"infrastructure/db/variables.tf",
+						}, nil
+					},
+				}, nil
+			}
+
+			ctx := context.Background()
+			namespace := createTestNamespace(ctx)
+			templateName := uniqueName("file-workflow-template")
+			branchName := uniqueName("branch-file-unit")
+			owner := uniqueName("owner")
+			repoName := uniqueName("repo")
+			repo := newBranchRepository(namespace, owner, repoName)
+			Expect(k8sClient.Create(ctx, repo)).To(Succeed())
+
+			workflowTemplate := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      templateName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "file-unit",
+					Match: terrakojoiov1alpha1.WorkflowMatch{
+						Paths:         []string{"infrastructure/**/*.tf"},
+						ExecutionUnit: terrakojoiov1alpha1.WorkflowExecutionUnitFile,
+					},
+					Job: newBranchTemplateJobSpec("plan", "hashicorp/terraform:latest", []string{"echo", "Planning..."}),
+				},
+			}
+			Expect(k8sClient.Create(ctx, workflowTemplate)).To(Succeed())
+
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: ctrl.ObjectMeta{
+					Name:      branchName,
+					Namespace: namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Repository: repoName,
+					Owner:      owner,
+					Name:       "feature/file-unit",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+				},
+			}
+			attachRepositoryOwnerReference(branch, repo)
+			Expect(k8sClient.Create(ctx, branch)).To(Succeed())
+
+			workflowList := &terrakojoiov1alpha1.WorkflowList{}
+			Eventually(func(g Gomega) {
+				fetchedBranch := &terrakojoiov1alpha1.Branch{}
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(branch), fetchedBranch)).To(Succeed())
+				g.Expect(k8sClient.List(
+					ctx,
+					workflowList,
+					client.InNamespace(namespace),
+					client.MatchingLabels{"terrakojo.io/owner-uid": string(fetchedBranch.UID)},
+				)).To(Succeed())
+				g.Expect(workflowList.Items).To(HaveLen(2))
+
+				paths := make([]string, 0, len(workflowList.Items))
+				for _, wf := range workflowList.Items {
+					g.Expect(wf.Spec.Template).To(Equal(templateName))
+					g.Expect(wf.Spec.Parameters).To(HaveKeyWithValue("executionUnit", "file"))
+					g.Expect(wf.Spec.Parameters).To(HaveKeyWithValue("isDefaultBranch", "false"))
+					paths = append(paths, wf.Spec.Path)
+				}
+				g.Expect(paths).To(ConsistOf(
+					"infrastructure/app/main.tf",
+					"infrastructure/db/variables.tf",
+				))
 			}).WithTimeout(5 * time.Second).WithPolling(200 * time.Millisecond).Should(Succeed())
 		})
 
@@ -1432,11 +1581,19 @@ var _ = Describe("Branch Controller", func() {
 					SHA:        "0123456789abcdef0123456789abcdef01234567",
 				},
 			}
-			_, err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow", "path", false)
+			_, err := reconciler.createWorkflowForBranch(
+				context.Background(),
+				branch,
+				"template",
+				"workflow",
+				"path",
+				false,
+				terrakojoiov1alpha1.WorkflowExecutionUnitFolder,
+			)
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("createWorkflowForBranch sets isDefaultBranch parameter", func() {
+		It("createWorkflowForBranch sets runtime parameters", func() {
 			testScheme := newBranchTestScheme()
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1457,7 +1614,15 @@ var _ = Describe("Branch Controller", func() {
 				Scheme: testScheme,
 			}
 
-			createdName, err := reconciler.createWorkflowForBranch(context.Background(), branch, "template", "workflow-", "path", true)
+			createdName, err := reconciler.createWorkflowForBranch(
+				context.Background(),
+				branch,
+				"template",
+				"workflow-",
+				".",
+				true,
+				terrakojoiov1alpha1.WorkflowExecutionUnitRepository,
+			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(createdName).NotTo(BeEmpty())
 
@@ -1465,6 +1630,25 @@ var _ = Describe("Branch Controller", func() {
 			Expect(reconciler.List(context.Background(), &workflows, client.InNamespace(branch.Namespace))).To(Succeed())
 			Expect(workflows.Items).To(HaveLen(1))
 			Expect(workflows.Items[0].Spec.Parameters).To(HaveKeyWithValue("isDefaultBranch", "true"))
+			Expect(workflows.Items[0].Spec.Parameters).To(HaveKeyWithValue("executionUnit", "repository"))
+		})
+
+		It("workflowTargets falls back to folder semantics for invalid executionUnit", func() {
+			targets := workflowTargets(
+				terrakojoiov1alpha1.WorkflowExecutionUnit("weird"),
+				[]string{
+					"infrastructure/app/main.tf",
+					"infrastructure/db/variables.tf",
+					"infrastructure/db/variables.tf",
+					"README.md",
+				},
+			)
+
+			Expect(targets).To(HaveLen(2))
+			Expect(targets[0].path).To(Equal("infrastructure/app"))
+			Expect(targets[0].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
+			Expect(targets[1].path).To(Equal("infrastructure/db"))
+			Expect(targets[1].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
 		})
 	})
 })
