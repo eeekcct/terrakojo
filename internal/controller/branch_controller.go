@@ -52,7 +52,7 @@ const branchFinalizer = "terrakojo.io/cleanup-workflows"
 
 const (
 	defaultWorkspaceMountPath = "/workspace"
-	defaultWorkspaceSize      = "5M"
+	defaultWorkspaceSize      = "5Mi"
 	workspaceVolumeName       = "terrakojo-workspace"
 	workspaceOwnerLabelKey    = "terrakojo.io/workspace-owner-uid"
 	workspaceSHAAnnotationKey = "terrakojo.io/workspace-sha"
