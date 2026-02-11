@@ -28,6 +28,29 @@ This repository is a Kubernetes controller (kubebuilder). Primary doc: docs/over
   - make manifests
 - Generated CRDs land in config/crd/bases.
 
+## PR creation rules
+- Scope rule (semi-strict): keep `1 PR = 1 feature`.
+- Allowed in the same PR: tests/docs/codegen changes that are directly required by that feature.
+- Not allowed in the same PR: unrelated feature work or refactors.
+- If mixed scope is found, split into feature-specific branches/PRs.
+
+- If a PR changes behavior or configuration, update related docs in the same PR.
+- If a PR changes user-facing CRD/spec behavior, update related samples in the same PR.
+- If sample updates are intentionally not needed, write the reason in the PR `Non-goals` section.
+
+- Public PRs must not contain private/internal notes (for example, Notion-only context).
+- PR description must include:
+  - `Summary`
+  - `Non-goals`
+  - `Validation`
+
+- Minimum validation before opening/updating a PR:
+  - make lint
+  - env GOCACHE=/tmp/go-build go test ./internal/controller -count=1
+- When API types or markers change, also run:
+  - make generate
+  - make manifests
+
 ## Notes / pitfalls
 - Webhook receiver is deployed as a separate Deployment (plain HTTP server), not as an "event" CRD.
 - Commit events must not be missed; handle duplicates/out-of-order and keep a recovery/HA plan beyond GitHub retries.
