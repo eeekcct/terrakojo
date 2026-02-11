@@ -85,7 +85,7 @@ for default and non-default branches.
 - each created Workflow gets:
   - `spec.parameters["isDefaultBranch"]` as a snapshot of branch classification at creation time.
   - `spec.parameters["executionUnit"]` as a normalized snapshot (`folder|repository|file`).
-  - `spec.parameters["dependsOnTemplates"]` as sorted unique template names (JSON array string).
+  - `spec.parameters["dependsOnTemplates"]` as normalized dependency template names (trimmed, non-empty, sorted unique JSON array string).
 1. Update branch annotation `terrakojo.io/last-sha = spec.sha`.
 1. Update branch status:
 - `status.workflows` (created workflow names),

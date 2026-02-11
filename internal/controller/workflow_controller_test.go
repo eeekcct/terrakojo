@@ -57,6 +57,7 @@ func newWorkflowTestScheme() *runtime.Scheme {
 func newWorkflowFakeClient(testScheme *runtime.Scheme, objs ...client.Object) client.Client {
 	builder := fake.NewClientBuilder().
 		WithScheme(testScheme).
+		WithIndex(&terrakojoiov1alpha1.Workflow{}, "metadata.ownerReferences.uid", indexByOwnerBranchUID).
 		WithStatusSubresource(&terrakojoiov1alpha1.Workflow{}, &terrakojoiov1alpha1.Branch{}, &terrakojoiov1alpha1.Repository{}, &batchv1.Job{})
 	if len(objs) > 0 {
 		builder.WithObjects(objs...)
@@ -2863,6 +2864,70 @@ var _ = Describe("Workflow Controller", func() {
 					Namespace: "default",
 					Labels: map[string]string{
 						"terrakojo.io/owner-uid": "owner-b",
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "plan",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseSucceeded)},
+			}
+			reconciler := &WorkflowReconciler{
+				Client: newWorkflowFakeClient(testScheme, current, otherOwnerSucceeded),
+				Scheme: testScheme,
+			}
+
+			ready, failedDeps, waitingDeps, err := reconciler.evaluateTemplateDependencies(
+				context.Background(),
+				current,
+				[]string{"plan"},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeFalse())
+			Expect(failedDeps).To(Equal([]string{"plan"}))
+			Expect(waitingDeps).To(BeEmpty())
+		})
+
+		It("evaluateTemplateDependencies falls back to owner reference UID scope", func() {
+			testScheme := newWorkflowTestScheme()
+			controllerTrue := true
+			current := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "current",
+					Namespace: "default",
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Kind:       "Branch",
+							UID:        types.UID("branch-owner-a"),
+							Controller: &controllerTrue,
+						},
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "apply",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+			}
+			otherOwnerSucceeded := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-plan-succeeded-other-owner-ref",
+					Namespace: "default",
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Kind:       "Branch",
+							UID:        types.UID("branch-owner-b"),
+							Controller: &controllerTrue,
+						},
 					},
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{

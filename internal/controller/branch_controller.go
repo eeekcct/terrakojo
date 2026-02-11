@@ -452,7 +452,7 @@ func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedF
 	for _, t := range templates.Items {
 		files := matchTemplate(t.Spec.Match, changedFiles)
 		if len(files) > 0 {
-			dependsOn := uniqueSortedStrings(t.Spec.DependsOnTemplates)
+			dependsOn := normalizeDependencyTemplateNames(t.Spec.DependsOnTemplates)
 			groups[t.Name] = matchedTemplate{
 				match:              t.Spec.Match,
 				files:              files,
@@ -461,6 +461,18 @@ func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedF
 		}
 	}
 	return groups
+}
+
+func normalizeDependencyTemplateNames(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return uniqueSortedStrings(normalized)
 }
 
 func orderTemplateNamesByDependency(groups map[string]matchedTemplate) ([]string, error) {

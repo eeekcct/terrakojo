@@ -79,7 +79,7 @@ corresponding GitHub Check Run status/conclusion.
   - if dependency workflows are running, set `DependenciesReady=False` (`WaitingDependencies`), update Check Run to `queued`, and requeue.
   - if a dependency workflow is missing, or has terminal failure (`Failed|Cancelled`), mark workflow `phase=Failed` with `DependenciesReady=False` (`DependencyFailed`), update Check Run to `completed/failure`, and stop.
   - if all dependencies succeeded, set `DependenciesReady=True` (`DependenciesSatisfied`) and continue.
-  - when workflow has label `terrakojo.io/owner-uid`, dependency candidate list is scoped to that label.
+  - dependency candidate list is scoped by `terrakojo.io/owner-uid` label when present; if absent, it falls back to controller ownerReference UID scope (`metadata.ownerReferences.uid` index).
 - create Job from `template.spec.job`.
 - set workflow as controller owner of the Job.
 - create Job.

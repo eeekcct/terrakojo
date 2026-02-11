@@ -1738,5 +1738,23 @@ var _ = Describe("Branch Controller", func() {
 			Expect(err.Error()).To(ContainSubstring("apply"))
 			Expect(err.Error()).To(ContainSubstring("plan"))
 		})
+
+		It("matchTemplates normalizes dependency template names", func() {
+			templates := terrakojoiov1alpha1.WorkflowTemplateList{
+				Items: []terrakojoiov1alpha1.WorkflowTemplate{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "apply"},
+						Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+							Match:              terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"infra/**"}},
+							DependsOnTemplates: []string{" plan ", "", "plan", " "},
+						},
+					},
+				},
+			}
+
+			groups := matchTemplates(templates, []string{"infra/main.tf"})
+			Expect(groups).To(HaveKey("apply"))
+			Expect(groups["apply"].dependsOnTemplates).To(Equal([]string{"plan"}))
+		})
 	})
 })

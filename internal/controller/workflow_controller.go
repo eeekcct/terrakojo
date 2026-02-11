@@ -595,6 +595,17 @@ func (r *WorkflowReconciler) evaluateTemplateDependencies(
 	}
 	if ownerUID, ok := workflow.Labels["terrakojo.io/owner-uid"]; ok && ownerUID != "" {
 		listOptions = append(listOptions, client.MatchingLabels{"terrakojo.io/owner-uid": ownerUID})
+	} else {
+		var controllerOwnerUID string
+		for _, ref := range workflow.OwnerReferences {
+			if ref.Controller != nil && *ref.Controller {
+				controllerOwnerUID = string(ref.UID)
+				break
+			}
+		}
+		if controllerOwnerUID != "" {
+			listOptions = append(listOptions, client.MatchingFields{"metadata.ownerReferences.uid": controllerOwnerUID})
+		}
 	}
 	if err := r.List(ctx, &workflows, listOptions...); err != nil {
 		return false, nil, nil, err
