@@ -7,7 +7,8 @@
   - Controller-managed parameter keys:
     - `spec.parameters["isDefaultBranch"]` (`"true"`/`"false"`).
     - `spec.parameters["executionUnit"]` (`"folder"|"repository"|"file"`).
-- **WorkflowTemplate**: spec `{displayName, match.paths[], match.executionUnit?, job}`.
+    - `spec.parameters["workspaceClaimName"]` / `spec.parameters["workspaceMountPath"]`.
+- **WorkflowTemplate**: spec `{displayName, match.paths[], match.executionUnit?, workspace?, job}`.
 
 ## Controllers
 - **RepositoryReconciler** (`internal/controller/repository_controller.go`)
@@ -26,12 +27,14 @@
     - `repository`: one Workflow with path `"."`.
     - `file`: one Workflow per matched file path.
   - Propagates default-branch context and execution unit into each created Workflow as `spec.parameters["isDefaultBranch"]` and `spec.parameters["executionUnit"]`.
+  - When `WorkflowTemplate.spec.workspace.enabled=true`, creates a target-scoped workspace PVC and passes it via `spec.parameters["workspaceClaimName"]`/`["workspaceMountPath"]`.
   - **Completion cleanup**: when all owned Workflows are terminal (Succeeded/Failed/Cancelled), deletes the Branch only for default-branch commits; non-default branches are kept until GitHub no longer lists them.
   - Uses field index `metadata.ownerReferences.uid` for Workflow lookup.
 
 - **WorkflowReconciler** (`internal/controller/workflow_controller.go`)
   - Creates GitHub CheckRun and a Job from `WorkflowTemplate.spec.job`.
-  - Injects reserved runtime env vars into all Job containers/initContainers (`TERRAKOJO_*`, including `TERRAKOJO_IS_DEFAULT_BRANCH` and `TERRAKOJO_EXECUTION_UNIT`).
+  - Injects reserved runtime env vars into all Job containers/initContainers (`TERRAKOJO_*`, including `TERRAKOJO_IS_DEFAULT_BRANCH`, `TERRAKOJO_EXECUTION_UNIT`, and `TERRAKOJO_WORKSPACE_DIR`).
+  - Mounts the shared workspace PVC to all containers when workspace parameters are present.
   - Maps Job status → Workflow `phase` and updates CheckRun.
   - Finalizer cancels CheckRun on deletion if Job not finished; if owning Branch is missing, deletes the Workflow.
 

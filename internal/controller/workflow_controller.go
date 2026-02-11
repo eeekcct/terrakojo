@@ -261,6 +261,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Create Job from WorkflowTemplate
 	job = r.createJobFromTemplate(jobName, workflow.Namespace, &template)
 	r.injectReservedRuntimeEnv(&job.Spec, &workflow, &branch)
+	r.injectWorkspaceVolume(&job.Spec, &workflow)
 
 	if err := controllerutil.SetControllerReference(&workflow, &job, r.Scheme); err != nil {
 		return ctrl.Result{}, err
@@ -443,6 +444,10 @@ func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakoj
 
 	executionUnit := workflow.Spec.Parameters[workflowParamExecutionUnit]
 	isDefaultBranch := workflow.Spec.Parameters[workflowParamIsDefaultBranch]
+	workspaceDir := workflow.Spec.Parameters[workflowParamWorkspaceMount]
+	if workspaceDir == "" && workflow.Spec.Parameters[workflowParamWorkspaceClaim] != "" {
+		workspaceDir = defaultWorkspaceMountPath
+	}
 
 	return []corev1.EnvVar{
 		{Name: "TERRAKOJO_OWNER", Value: workflow.Spec.Owner},
@@ -457,7 +462,73 @@ func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakoj
 		{Name: "TERRAKOJO_PR_NUMBER", Value: prNumber},
 		{Name: "TERRAKOJO_EXECUTION_UNIT", Value: executionUnit},
 		{Name: "TERRAKOJO_IS_DEFAULT_BRANCH", Value: isDefaultBranch},
+		{Name: "TERRAKOJO_WORKSPACE_DIR", Value: workspaceDir},
 	}
+}
+
+func (r *WorkflowReconciler) injectWorkspaceVolume(
+	jobSpec *batchv1.JobSpec,
+	workflow *terrakojoiov1alpha1.Workflow,
+) {
+	claimName := workflow.Spec.Parameters[workflowParamWorkspaceClaim]
+	if claimName == "" {
+		return
+	}
+	mountPath := workflow.Spec.Parameters[workflowParamWorkspaceMount]
+	if mountPath == "" {
+		mountPath = defaultWorkspaceMountPath
+	}
+
+	workspaceVolume := corev1.Volume{
+		Name: workspaceVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: claimName,
+			},
+		},
+	}
+	jobSpec.Template.Spec.Volumes = mergeVolumesWithWorkspace(jobSpec.Template.Spec.Volumes, workspaceVolume)
+
+	workspaceMount := corev1.VolumeMount{
+		Name:      workspaceVolumeName,
+		MountPath: mountPath,
+	}
+	for i := range jobSpec.Template.Spec.Containers {
+		jobSpec.Template.Spec.Containers[i].VolumeMounts = mergeVolumeMountsWithWorkspace(
+			jobSpec.Template.Spec.Containers[i].VolumeMounts,
+			workspaceMount,
+		)
+	}
+	for i := range jobSpec.Template.Spec.InitContainers {
+		jobSpec.Template.Spec.InitContainers[i].VolumeMounts = mergeVolumeMountsWithWorkspace(
+			jobSpec.Template.Spec.InitContainers[i].VolumeMounts,
+			workspaceMount,
+		)
+	}
+}
+
+func mergeVolumesWithWorkspace(existing []corev1.Volume, workspace corev1.Volume) []corev1.Volume {
+	merged := make([]corev1.Volume, 0, len(existing)+1)
+	for _, volume := range existing {
+		if volume.Name == workspace.Name {
+			continue
+		}
+		merged = append(merged, volume)
+	}
+	merged = append(merged, workspace)
+	return merged
+}
+
+func mergeVolumeMountsWithWorkspace(existing []corev1.VolumeMount, workspace corev1.VolumeMount) []corev1.VolumeMount {
+	merged := make([]corev1.VolumeMount, 0, len(existing)+1)
+	for _, mount := range existing {
+		if mount.Name == workspace.Name || mount.MountPath == workspace.MountPath {
+			continue
+		}
+		merged = append(merged, mount)
+	}
+	merged = append(merged, workspace)
+	return merged
 }
 
 func mergeEnvWithReserved(existing, reserved []corev1.EnvVar) []corev1.EnvVar {

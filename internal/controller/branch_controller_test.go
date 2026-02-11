@@ -106,6 +106,7 @@ func attachRepositoryOwnerReference(branch *terrakojoiov1alpha1.Branch, repo *te
 func newBranchTestScheme() *runtime.Scheme {
 	testScheme := runtime.NewScheme()
 	Expect(terrakojoiov1alpha1.AddToScheme(testScheme)).To(Succeed())
+	Expect(corev1.AddToScheme(testScheme)).To(Succeed())
 	return testScheme
 }
 
@@ -1587,8 +1588,10 @@ var _ = Describe("Branch Controller", func() {
 				"template",
 				"workflow",
 				"path",
-				false,
-				terrakojoiov1alpha1.WorkflowExecutionUnitFolder,
+				map[string]string{
+					workflowParamIsDefaultBranch: "false",
+					workflowParamExecutionUnit:   string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder),
+				},
 			)
 			Expect(err).To(HaveOccurred())
 		})
@@ -1620,8 +1623,10 @@ var _ = Describe("Branch Controller", func() {
 				"template",
 				"workflow-",
 				".",
-				true,
-				terrakojoiov1alpha1.WorkflowExecutionUnitRepository,
+				map[string]string{
+					workflowParamIsDefaultBranch: "true",
+					workflowParamExecutionUnit:   string(terrakojoiov1alpha1.WorkflowExecutionUnitRepository),
+				},
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(createdName).NotTo(BeEmpty())
@@ -1649,6 +1654,110 @@ var _ = Describe("Branch Controller", func() {
 			Expect(targets[0].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
 			Expect(targets[1].path).To(Equal("infrastructure/db"))
 			Expect(targets[1].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
+		})
+
+		It("buildWorkflowParameters sets runtime parameters", func() {
+			parameters := buildWorkflowParameters(
+				true,
+				terrakojoiov1alpha1.WorkflowExecutionUnitFile,
+			)
+			Expect(parameters).To(HaveKeyWithValue(workflowParamIsDefaultBranch, "true"))
+			Expect(parameters).To(HaveKeyWithValue(workflowParamExecutionUnit, "file"))
+		})
+
+		It("ensureWorkspacePVC creates and reuses a workspace claim", func() {
+			testScheme := newBranchTestScheme()
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-workspace",
+					Namespace: "default",
+					UID:       types.UID("branch-workspace"),
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Name:       "feature/workspace",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+				},
+			}
+			reconciler := &BranchReconciler{
+				Client: newBranchFakeClient(testScheme, branch),
+				Scheme: testScheme,
+			}
+
+			target := workflowTarget{
+				path:          "infra/app",
+				executionUnit: terrakojoiov1alpha1.WorkflowExecutionUnitFolder,
+			}
+			workspace := terrakojoiov1alpha1.WorkflowWorkspaceSpec{
+				Enabled: true,
+				Size:    "1Gi",
+			}
+			claimNameA, err := reconciler.ensureWorkspacePVC(context.Background(), branch, target, workspace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(claimNameA).NotTo(BeEmpty())
+
+			claimNameB, err := reconciler.ensureWorkspacePVC(context.Background(), branch, target, workspace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(claimNameB).To(Equal(claimNameA))
+
+			var pvcList corev1.PersistentVolumeClaimList
+			Expect(reconciler.List(context.Background(), &pvcList, client.InNamespace(branch.Namespace))).To(Succeed())
+			Expect(pvcList.Items).To(HaveLen(1))
+			Expect(pvcList.Items[0].Name).To(Equal(claimNameA))
+			Expect(pvcList.Items[0].Labels).To(HaveKeyWithValue(workspaceOwnerLabelKey, string(branch.UID)))
+			Expect(pvcList.Items[0].Annotations).To(HaveKeyWithValue(workspaceSHAAnnotationKey, branch.Spec.SHA))
+		})
+
+		It("cleanupWorkspacePVCsForBranch removes stale claims for previous sha", func() {
+			testScheme := newBranchTestScheme()
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-workspace-cleanup",
+					Namespace: "default",
+					UID:       types.UID("branch-workspace-cleanup"),
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Name:       "feature/workspace",
+					SHA:        "new-sha",
+				},
+			}
+			stale := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "stale",
+					Namespace: branch.Namespace,
+					Labels: map[string]string{
+						workspaceOwnerLabelKey: string(branch.UID),
+					},
+					Annotations: map[string]string{
+						workspaceSHAAnnotationKey: "old-sha",
+					},
+				},
+			}
+			current := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "current",
+					Namespace: branch.Namespace,
+					Labels: map[string]string{
+						workspaceOwnerLabelKey: string(branch.UID),
+					},
+					Annotations: map[string]string{
+						workspaceSHAAnnotationKey: "new-sha",
+					},
+				},
+			}
+			reconciler := &BranchReconciler{
+				Client: newBranchFakeClient(testScheme, branch, stale, current),
+				Scheme: testScheme,
+			}
+
+			Expect(reconciler.cleanupWorkspacePVCsForBranch(context.Background(), branch, "new-sha")).To(Succeed())
+
+			err := reconciler.Get(context.Background(), client.ObjectKeyFromObject(stale), &corev1.PersistentVolumeClaim{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			Expect(reconciler.Get(context.Background(), client.ObjectKeyFromObject(current), &corev1.PersistentVolumeClaim{})).To(Succeed())
 		})
 	})
 })

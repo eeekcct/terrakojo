@@ -37,6 +37,10 @@ type WorkflowTemplateSpec struct {
 	// +required
 	Match WorkflowMatch `json:"match"`
 
+	// Workspace configures an optional shared workspace for workflows.
+	// +optional
+	Workspace WorkflowWorkspaceSpec `json:"workspace,omitempty"`
+
 	// +required
 	Job batchv1.JobSpec `json:"job"`
 }
@@ -61,6 +65,24 @@ const (
 	WorkflowExecutionUnitRepository WorkflowExecutionUnit = "repository"
 	WorkflowExecutionUnitFile       WorkflowExecutionUnit = "file"
 )
+
+type WorkflowWorkspaceSpec struct {
+	// Enabled toggles shared workspace creation and mounting.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// MountPath is the path mounted into all containers and initContainers.
+	// +optional
+	MountPath string `json:"mountPath,omitempty"`
+
+	// Size is the requested PVC storage size (for example, "5Gi").
+	// +optional
+	Size string `json:"size,omitempty"`
+
+	// StorageClassName is the storage class used for the workspace PVC.
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
+}
 
 // WorkflowTemplateStatus defines the observed state of WorkflowTemplate.
 type WorkflowTemplateStatus struct {

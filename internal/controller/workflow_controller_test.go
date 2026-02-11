@@ -668,6 +668,7 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv(containerEnv, "TERRAKOJO_PR_NUMBER", "123")
 			expectEnv(containerEnv, "TERRAKOJO_EXECUTION_UNIT", "repository")
 			expectEnv(containerEnv, "TERRAKOJO_IS_DEFAULT_BRANCH", "false")
+			expectEnv(containerEnv, "TERRAKOJO_WORKSPACE_DIR", "")
 			expectNoEnv(containerEnv, "TERRAKOJO_TF_MODE")
 
 			expectEnv(initEnv, "TERRAKOJO_OWNER", "owner")
@@ -675,6 +676,7 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv(initEnv, "TERRAKOJO_PR_NUMBER", "123")
 			expectEnv(initEnv, "TERRAKOJO_EXECUTION_UNIT", "repository")
 			expectEnv(initEnv, "TERRAKOJO_IS_DEFAULT_BRANCH", "false")
+			expectEnv(initEnv, "TERRAKOJO_WORKSPACE_DIR", "")
 
 			updated := &terrakojoiov1alpha1.Workflow{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
@@ -2236,6 +2238,7 @@ var _ = Describe("Workflow Controller", func() {
 			expectEnv("TERRAKOJO_PR_NUMBER", "")
 			expectEnv("TERRAKOJO_EXECUTION_UNIT", "")
 			expectEnv("TERRAKOJO_IS_DEFAULT_BRANCH", "")
+			expectEnv("TERRAKOJO_WORKSPACE_DIR", "")
 			_, tfModeExists := getEnv(jobSpec.Template.Spec.Containers[0].Env, "TERRAKOJO_TF_MODE")
 			Expect(tfModeExists).To(BeFalse())
 		})
@@ -2320,6 +2323,130 @@ var _ = Describe("Workflow Controller", func() {
 			}
 			Expect(isDefaultBranchValue).To(Equal("not-a-bool"))
 			Expect(executionUnitValue).To(Equal("weird"))
+		})
+
+		It("injectReservedRuntimeEnv includes workspace dir parameter", func() {
+			reconciler := &WorkflowReconciler{}
+			jobSpec := batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "main"}},
+					},
+				},
+			}
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "workflow", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-cr",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+					Parameters: map[string]string{
+						workflowParamWorkspaceMount: "/workspace/shared",
+					},
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{Spec: terrakojoiov1alpha1.BranchSpec{Name: "feature"}}
+
+			reconciler.injectReservedRuntimeEnv(&jobSpec, workflow, branch)
+
+			var workspaceDir string
+			for _, env := range jobSpec.Template.Spec.Containers[0].Env {
+				if env.Name == "TERRAKOJO_WORKSPACE_DIR" {
+					workspaceDir = env.Value
+				}
+			}
+			Expect(workspaceDir).To(Equal("/workspace/shared"))
+		})
+
+		It("injectReservedRuntimeEnv defaults workspace dir when only claim is provided", func() {
+			reconciler := &WorkflowReconciler{}
+			jobSpec := batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "main"}},
+					},
+				},
+			}
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "workflow", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-cr",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "template",
+					Parameters: map[string]string{
+						workflowParamWorkspaceClaim: "claim-a",
+					},
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{Spec: terrakojoiov1alpha1.BranchSpec{Name: "feature"}}
+
+			reconciler.injectReservedRuntimeEnv(&jobSpec, workflow, branch)
+
+			var workspaceDir string
+			for _, env := range jobSpec.Template.Spec.Containers[0].Env {
+				if env.Name == "TERRAKOJO_WORKSPACE_DIR" {
+					workspaceDir = env.Value
+				}
+			}
+			Expect(workspaceDir).To(Equal(defaultWorkspaceMountPath))
+		})
+
+		It("injectWorkspaceVolume mounts workspace PVC to all containers", func() {
+			reconciler := &WorkflowReconciler{}
+			jobSpec := batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Volumes: []corev1.Volume{
+							{Name: "existing"},
+							{
+								Name: workspaceVolumeName,
+								VolumeSource: corev1.VolumeSource{
+									EmptyDir: &corev1.EmptyDirVolumeSource{},
+								},
+							},
+						},
+						Containers: []corev1.Container{
+							{Name: "main", VolumeMounts: []corev1.VolumeMount{{Name: "existing", MountPath: "/tmp"}}},
+						},
+						InitContainers: []corev1.Container{
+							{Name: "init"},
+						},
+					},
+				},
+			}
+			workflow := &terrakojoiov1alpha1.Workflow{
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Parameters: map[string]string{
+						workflowParamWorkspaceClaim: "claim-a",
+						workflowParamWorkspaceMount: "/workspace/a",
+					},
+				},
+			}
+
+			reconciler.injectWorkspaceVolume(&jobSpec, workflow)
+
+			var workspaceVolume corev1.Volume
+			foundVolume := false
+			for _, volume := range jobSpec.Template.Spec.Volumes {
+				if volume.Name == workspaceVolumeName {
+					workspaceVolume = volume
+					foundVolume = true
+				}
+			}
+			Expect(foundVolume).To(BeTrue())
+			Expect(workspaceVolume.PersistentVolumeClaim).NotTo(BeNil())
+			Expect(workspaceVolume.PersistentVolumeClaim.ClaimName).To(Equal("claim-a"))
+
+			Expect(jobSpec.Template.Spec.Containers[0].VolumeMounts).To(ContainElement(
+				corev1.VolumeMount{Name: workspaceVolumeName, MountPath: "/workspace/a"},
+			))
+			Expect(jobSpec.Template.Spec.InitContainers[0].VolumeMounts).To(ContainElement(
+				corev1.VolumeMount{Name: workspaceVolumeName, MountPath: "/workspace/a"},
+			))
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {

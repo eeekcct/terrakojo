@@ -28,6 +28,7 @@ corresponding GitHub Check Run status/conclusion.
 - `spec.path`
 - `spec.parameters["isDefaultBranch"]` (optional string; passed through to env as-is; empty string if absent; typically `"true"`/`"false"`)
 - `spec.parameters["executionUnit"]` (optional string; passed through to env as-is; empty string if absent; commonly `"folder"`/`"repository"`/`"file"`)
+- `spec.parameters["workspaceClaimName"]` / `spec.parameters["workspaceMountPath"]` (optional workspace wiring)
 - Workflow status fields used:
 - `status.checkRunID`
 - `status.checkRunName`
@@ -105,12 +106,17 @@ corresponding GitHub Check Run status/conclusion.
   - `TERRAKOJO_PR_NUMBER`
   - `TERRAKOJO_EXECUTION_UNIT`
   - `TERRAKOJO_IS_DEFAULT_BRANCH`
+  - `TERRAKOJO_WORKSPACE_DIR`
 - `TERRAKOJO_EXECUTION_UNIT` is derived from `spec.parameters["executionUnit"]`:
   - the value is passed through as-is.
   - if the parameter is missing, the env var is injected as an empty string.
 - `TERRAKOJO_IS_DEFAULT_BRANCH` is derived from `spec.parameters["isDefaultBranch"]`:
   - the value is passed through as-is.
   - if the parameter is missing, the env var is injected as an empty string.
+- `TERRAKOJO_WORKSPACE_DIR` is derived from `spec.parameters["workspaceMountPath"]`:
+  - the value is passed through as-is.
+  - if the parameter is missing, the env var is injected as an empty string.
+- When `spec.parameters["workspaceClaimName"]` is present, the Job gets a PVC volume named `terrakojo-workspace` and mounts it into all containers/initContainers at `workspaceMountPath` (or `/workspace` if mount path is absent).
 
 ## Check Run Mapping
 - `Pending` -> `queued` (no conclusion)
@@ -163,6 +169,7 @@ Important log events:
 - `status.jobs` is a legacy compatibility field; the controller neither uses it for control decisions nor actively maintains it.
 - Default-branch context for job scripts should be read from `TERRAKOJO_IS_DEFAULT_BRANCH` instead of hard-coding branch names.
 - Workflow unit context for job scripts should be read from `TERRAKOJO_EXECUTION_UNIT`.
+- Shared workspace usage should read/write through `TERRAKOJO_WORKSPACE_DIR`.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/workflow_controller_test.go`
