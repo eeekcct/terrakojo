@@ -27,7 +27,7 @@
     - `repository`: one Workflow with path `"."`.
     - `file`: one Workflow per matched file path.
   - Propagates default-branch context and execution unit into each created Workflow as `spec.parameters["isDefaultBranch"]` and `spec.parameters["executionUnit"]`.
-  - When `WorkflowTemplate.spec.workspace.enabled=true`, creates a target-scoped workspace PVC and passes it via `spec.parameters["workspaceClaimName"]`/`["workspaceMountPath"]`.
+  - When `WorkflowTemplate.spec.workspace.enabled=true`, creates a target-scoped workspace PVC and passes it via `spec.parameters["workspaceClaimName"]`/`["workspaceMountPath"]` (reused across templates for the same branch/SHA/executionUnit/path target).
   - **Completion cleanup**: when all owned Workflows are terminal (Succeeded/Failed/Cancelled), deletes the Branch only for default-branch commits; non-default branches are kept until GitHub no longer lists them.
   - Uses field index `metadata.ownerReferences.uid` for Workflow lookup.
 
