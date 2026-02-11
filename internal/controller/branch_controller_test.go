@@ -1668,5 +1668,25 @@ var _ = Describe("Branch Controller", func() {
 			Expect(parameters).To(HaveKey(workflowParamDependsOn))
 			Expect(parameters[workflowParamDependsOn]).To(Equal(`["apply","plan"]`))
 		})
+
+		It("buildWorkflowParameters omits dependency parameter when dependsOnTemplates is empty", func() {
+			parameters, err := buildWorkflowParameters(
+				false,
+				terrakojoiov1alpha1.WorkflowExecutionUnitFolder,
+				nil,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(parameters).To(HaveKeyWithValue(workflowParamIsDefaultBranch, "false"))
+			Expect(parameters).To(HaveKeyWithValue(workflowParamExecutionUnit, "folder"))
+			Expect(parameters).NotTo(HaveKey(workflowParamDependsOn))
+
+			parameters, err = buildWorkflowParameters(
+				false,
+				terrakojoiov1alpha1.WorkflowExecutionUnitFolder,
+				[]string{},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(parameters).NotTo(HaveKey(workflowParamDependsOn))
+		})
 	})
 })
