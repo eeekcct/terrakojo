@@ -18,8 +18,6 @@ package controller
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"path"
 	"sort"
@@ -27,9 +25,6 @@ import (
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,14 +45,6 @@ type BranchReconciler struct {
 
 const branchFinalizer = "terrakojo.io/cleanup-workflows"
 
-const (
-	defaultWorkspaceMountPath = "/workspace"
-	defaultWorkspaceSize      = "5Mi"
-	workspaceVolumeName       = "terrakojo-workspace"
-	workspaceOwnerLabelKey    = "terrakojo.io/workspace-owner-uid"
-	workspaceSHAAnnotationKey = "terrakojo.io/workspace-sha"
-)
-
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=terrakojo.io,resources=branches/finalizers,verbs=update
@@ -66,7 +53,6 @@ const (
 
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflowtemplates,verbs=get;list;watch
 // +kubebuilder:rbac:groups=terrakojo.io,resources=workflows,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -193,12 +179,6 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		log.Info("Deleted existing workflows for branch due to SHA change",
 			"oldSHA", lastSHA,
 			"newSHA", branch.Spec.SHA)
-		if err := r.cleanupWorkspacePVCsForBranch(ctx, &branch, branch.Spec.SHA); err != nil {
-			log.Error(err, "Failed to cleanup stale workspace PVCs for branch",
-				"oldSHA", lastSHA,
-				"newSHA", branch.Spec.SHA)
-			return ctrl.Result{}, err
-		}
 	}
 
 	// Get GitHub client using manager (required)
@@ -289,24 +269,14 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			continue
 		}
 		for _, target := range targets {
-			parameters := buildWorkflowParameters(isDefaultBranch, target.executionUnit)
-			if group.workspace.Enabled {
-				mountPath := normalizeWorkspaceMountPath(group.workspace.MountPath)
-				claimName, err := r.ensureWorkspacePVC(ctx, &branch, templateName, target, group.workspace)
-				if err != nil {
-					log.Error(err, "Failed to ensure workspace PVC for Branch")
-					return ctrl.Result{}, err
-				}
-				parameters[workflowParamWorkspaceClaim] = claimName
-				parameters[workflowParamWorkspaceMount] = mountPath
-			}
 			createdName, err := r.createWorkflowForBranch(
 				ctx,
 				&branch,
 				templateName,
 				fmt.Sprintf("%s-", templateName),
 				target.path,
-				parameters,
+				isDefaultBranch,
+				target.executionUnit,
 			)
 			if err != nil {
 				log.Error(err, "Failed to create Workflow for Branch")
@@ -405,8 +375,10 @@ func (r *BranchReconciler) createWorkflowForBranch(
 	templateName,
 	workflowGenerateName,
 	workflowPath string,
-	parameters map[string]string,
+	isDefaultBranch bool,
+	executionUnit terrakojoiov1alpha1.WorkflowExecutionUnit,
 ) (string, error) {
+	executionUnit = normalizeExecutionUnit(executionUnit)
 	workflow := &terrakojoiov1alpha1.Workflow{
 		ObjectMeta: ctrl.ObjectMeta{
 			GenerateName: workflowGenerateName,
@@ -422,7 +394,10 @@ func (r *BranchReconciler) createWorkflowForBranch(
 			SHA:        branch.Spec.SHA,
 			Template:   templateName,
 			Path:       workflowPath,
-			Parameters: parameters,
+			Parameters: map[string]string{
+				workflowParamIsDefaultBranch: strconv.FormatBool(isDefaultBranch),
+				workflowParamExecutionUnit:   string(executionUnit),
+			},
 		},
 	}
 	if err := controllerutil.SetControllerReference(branch, workflow, r.Scheme); err != nil {
@@ -457,9 +432,8 @@ func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch 
 }
 
 type matchedTemplate struct {
-	match     terrakojoiov1alpha1.WorkflowMatch
-	files     []string
-	workspace terrakojoiov1alpha1.WorkflowWorkspaceSpec
+	match terrakojoiov1alpha1.WorkflowMatch
+	files []string
 }
 
 type workflowTarget struct {
@@ -473,9 +447,8 @@ func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedF
 		files := matchTemplate(t.Spec.Match, changedFiles)
 		if len(files) > 0 {
 			groups[t.Name] = matchedTemplate{
-				match:     t.Spec.Match,
-				files:     files,
-				workspace: t.Spec.Workspace,
+				match: t.Spec.Match,
+				files: files,
 			}
 		}
 	}
@@ -567,129 +540,6 @@ func uniqueSortedStrings(values []string) []string {
 	}
 	sort.Strings(unique)
 	return unique
-}
-
-func buildWorkflowParameters(
-	isDefaultBranch bool,
-	executionUnit terrakojoiov1alpha1.WorkflowExecutionUnit,
-) map[string]string {
-	return map[string]string{
-		workflowParamIsDefaultBranch: strconv.FormatBool(isDefaultBranch),
-		workflowParamExecutionUnit:   string(normalizeExecutionUnit(executionUnit)),
-	}
-}
-
-func normalizeWorkspaceMountPath(mountPath string) string {
-	if mountPath == "" {
-		return defaultWorkspaceMountPath
-	}
-	return mountPath
-}
-
-func workspaceClaimNameForTarget(
-	branch *terrakojoiov1alpha1.Branch,
-	templateName string,
-	target workflowTarget,
-) string {
-	key := fmt.Sprintf(
-		"%s|%s|%s|%s|%s",
-		branch.UID,
-		branch.Spec.SHA,
-		templateName,
-		normalizeExecutionUnit(target.executionUnit),
-		target.path,
-	)
-	sum := sha1.Sum([]byte(key))
-	return fmt.Sprintf("ws-%s", hex.EncodeToString(sum[:])[:20])
-}
-
-func (r *BranchReconciler) ensureWorkspacePVC(
-	ctx context.Context,
-	branch *terrakojoiov1alpha1.Branch,
-	templateName string,
-	target workflowTarget,
-	workspace terrakojoiov1alpha1.WorkflowWorkspaceSpec,
-) (string, error) {
-	claimName := workspaceClaimNameForTarget(branch, templateName, target)
-	key := client.ObjectKey{Name: claimName, Namespace: branch.Namespace}
-	var existing corev1.PersistentVolumeClaim
-	if err := r.Get(ctx, key, &existing); err == nil {
-		return claimName, nil
-	} else if client.IgnoreNotFound(err) != nil {
-		return "", err
-	}
-
-	size := workspace.Size
-	if size == "" {
-		size = defaultWorkspaceSize
-	}
-	requestedStorage, err := resource.ParseQuantity(size)
-	if err != nil {
-		return "", fmt.Errorf("invalid workspace size %q: %w", size, err)
-	}
-
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      claimName,
-			Namespace: branch.Namespace,
-			Labels: map[string]string{
-				workspaceOwnerLabelKey: string(branch.UID),
-			},
-			Annotations: map[string]string{
-				workspaceSHAAnnotationKey: branch.Spec.SHA,
-			},
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
-			},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: requestedStorage,
-				},
-			},
-		},
-	}
-	if workspace.StorageClassName != "" {
-		pvc.Spec.StorageClassName = &workspace.StorageClassName
-	}
-
-	if err := controllerutil.SetControllerReference(branch, pvc, r.Scheme); err != nil {
-		return "", err
-	}
-	if err := r.Create(ctx, pvc); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return claimName, nil
-		}
-		return "", err
-	}
-	return claimName, nil
-}
-
-func (r *BranchReconciler) cleanupWorkspacePVCsForBranch(
-	ctx context.Context,
-	branch *terrakojoiov1alpha1.Branch,
-	currentSHA string,
-) error {
-	var pvcList corev1.PersistentVolumeClaimList
-	if err := r.List(
-		ctx,
-		&pvcList,
-		client.InNamespace(branch.Namespace),
-		client.MatchingLabels{workspaceOwnerLabelKey: string(branch.UID)},
-	); err != nil {
-		return fmt.Errorf("failed to list workspace PVCs: %w", err)
-	}
-
-	for _, pvc := range pvcList.Items {
-		if pvc.Annotations[workspaceSHAAnnotationKey] == currentSHA {
-			continue
-		}
-		if err := r.Delete(ctx, &pvc); err != nil && client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete stale workspace PVC %s: %w", pvc.Name, err)
-		}
-	}
-	return nil
 }
 
 // listWorkflowsForBranch returns workflows owned by the branch using the UID field index.

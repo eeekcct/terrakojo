@@ -29,7 +29,6 @@ for default and non-default branches.
 - Workflow parameter key written by this controller:
 - `spec.parameters["isDefaultBranch"]` (`"true"` when `branch.spec.name == repo.spec.defaultBranch`, otherwise `"false"`).
 - `spec.parameters["executionUnit"]` (`"folder"`/`"repository"`/`"file"`) from `WorkflowTemplate.spec.match.executionUnit` with fallback to `"folder"`.
-- `spec.parameters["workspaceClaimName"]` / `spec.parameters["workspaceMountPath"]` when `WorkflowTemplate.spec.workspace.enabled=true`.
 - Required dependency:
 - `GitHubClientManager` (`GetClientForBranch` must succeed).
 - Required related resources:
@@ -62,7 +61,6 @@ for default and non-default branches.
   - non-default branch: keep branch.
 - otherwise (running/non-terminal): no-op.
 1. If SHA changed (`lastSHA` exists and differs): delete existing owned workflows.
-1. If SHA changed (`lastSHA` exists and differs): delete stale workspace PVCs owned by this branch that were created for previous SHAs.
 1. Create GitHub client for branch.
 1. Fetch changed files:
 - use PR files API when `spec.prNumber != 0`;
@@ -80,11 +78,6 @@ for default and non-default branches.
   - `folder` (default): group matched files by folder (`path.Dir`) and create one `Workflow` per folder.
   - `repository`: create one `Workflow` with `Workflow.Spec.Path = "."`.
   - `file`: create one `Workflow` per matched file path.
-- if `WorkflowTemplate.spec.workspace.enabled=true`:
-  - create/get a target-scoped PVC for the current branch SHA;
-  - PVC scope is `branch+sha+template+executionUnit+path` (not shared across templates);
-  - defaults: `mountPath=/workspace`, `size=5Mi` when unspecified;
-  - pass claim name and mount path through workflow parameters.
 - each created Workflow gets:
   - `spec.parameters["isDefaultBranch"]` as a snapshot of branch classification at creation time.
   - `spec.parameters["executionUnit"]` as a normalized snapshot (`folder|repository|file`).
@@ -106,7 +99,6 @@ for default and non-default branches.
 ## State and Idempotency
 - `terrakojo.io/last-sha` prevents duplicate workflow creation for the same SHA.
 - SHA change causes full replacement of branch-owned workflows.
-- SHA change also removes stale branch-owned workspace PVCs from previous SHAs.
 - Terminal completion check requires at least one workflow; empty set is handled separately.
 - Default branch and non-default branch have intentionally different retention behavior.
 

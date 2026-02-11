@@ -8917,26 +8917,6 @@ spec:
                 required:
                 - paths
                 type: object
-              workspace:
-                description: Workspace configures an optional shared workspace for
-                  workflows.
-                properties:
-                  enabled:
-                    description: Enabled toggles shared workspace creation and mounting.
-                    type: boolean
-                  mountPath:
-                    description: MountPath is the path mounted into all containers
-                      and initContainers.
-                    type: string
-                  size:
-                    description: Size is the requested PVC storage size (for example,
-                      "5Gi").
-                    type: string
-                  storageClassName:
-                    description: StorageClassName is the storage class used for the
-                      workspace PVC.
-                    type: string
-                type: object
             required:
             - displayName
             - job
