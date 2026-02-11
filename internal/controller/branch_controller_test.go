@@ -1666,7 +1666,7 @@ var _ = Describe("Branch Controller", func() {
 			Expect(parameters).To(HaveKeyWithValue(workflowParamExecutionUnit, "file"))
 		})
 
-		It("ensureWorkspacePVC creates and reuses a workspace claim", func() {
+		It("ensureWorkspacePVC creates and reuses a workspace claim per template", func() {
 			testScheme := newBranchTestScheme()
 			branch := &terrakojoiov1alpha1.Branch{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1693,21 +1693,32 @@ var _ = Describe("Branch Controller", func() {
 			workspace := terrakojoiov1alpha1.WorkflowWorkspaceSpec{
 				Enabled: true,
 			}
-			claimNameA, err := reconciler.ensureWorkspacePVC(context.Background(), branch, target, workspace)
+			claimNameA, err := reconciler.ensureWorkspacePVC(context.Background(), branch, "plan", target, workspace)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(claimNameA).NotTo(BeEmpty())
 
-			claimNameB, err := reconciler.ensureWorkspacePVC(context.Background(), branch, target, workspace)
+			claimNameB, err := reconciler.ensureWorkspacePVC(context.Background(), branch, "plan", target, workspace)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(claimNameB).To(Equal(claimNameA))
 
+			claimNameC, err := reconciler.ensureWorkspacePVC(context.Background(), branch, "apply", target, workspace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(claimNameC).NotTo(Equal(claimNameA))
+
 			var pvcList corev1.PersistentVolumeClaimList
 			Expect(reconciler.List(context.Background(), &pvcList, client.InNamespace(branch.Namespace))).To(Succeed())
-			Expect(pvcList.Items).To(HaveLen(1))
-			Expect(pvcList.Items[0].Name).To(Equal(claimNameA))
-			Expect(pvcList.Items[0].Labels).To(HaveKeyWithValue(workspaceOwnerLabelKey, string(branch.UID)))
-			Expect(pvcList.Items[0].Annotations).To(HaveKeyWithValue(workspaceSHAAnnotationKey, branch.Spec.SHA))
-			Expect(pvcList.Items[0].Spec.Resources.Requests.Storage().Cmp(resource.MustParse(defaultWorkspaceSize))).To(Equal(0))
+			Expect(pvcList.Items).To(HaveLen(2))
+
+			nameToPVC := map[string]corev1.PersistentVolumeClaim{}
+			for _, pvc := range pvcList.Items {
+				nameToPVC[pvc.Name] = pvc
+			}
+			Expect(nameToPVC).To(HaveKey(claimNameA))
+			Expect(nameToPVC).To(HaveKey(claimNameC))
+			pvcA := nameToPVC[claimNameA]
+			Expect(pvcA.Labels).To(HaveKeyWithValue(workspaceOwnerLabelKey, string(branch.UID)))
+			Expect(pvcA.Annotations).To(HaveKeyWithValue(workspaceSHAAnnotationKey, branch.Spec.SHA))
+			Expect(pvcA.Spec.Resources.Requests.Storage().Cmp(resource.MustParse(defaultWorkspaceSize))).To(Equal(0))
 		})
 
 		It("cleanupWorkspacePVCsForBranch removes stale claims for previous sha", func() {

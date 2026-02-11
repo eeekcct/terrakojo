@@ -169,7 +169,7 @@ Important log events:
 - `status.jobs` is a legacy compatibility field; the controller neither uses it for control decisions nor actively maintains it.
 - Default-branch context for job scripts should be read from `TERRAKOJO_IS_DEFAULT_BRANCH` instead of hard-coding branch names.
 - Workflow unit context for job scripts should be read from `TERRAKOJO_EXECUTION_UNIT`.
-- Shared workspace usage should read/write through `TERRAKOJO_WORKSPACE_DIR`.
+- Workspace usage should read/write through `TERRAKOJO_WORKSPACE_DIR`.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/workflow_controller_test.go`

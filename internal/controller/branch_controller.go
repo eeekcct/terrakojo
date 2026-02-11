@@ -292,7 +292,7 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			parameters := buildWorkflowParameters(isDefaultBranch, target.executionUnit)
 			if group.workspace.Enabled {
 				mountPath := normalizeWorkspaceMountPath(group.workspace.MountPath)
-				claimName, err := r.ensureWorkspacePVC(ctx, &branch, target, group.workspace)
+				claimName, err := r.ensureWorkspacePVC(ctx, &branch, templateName, target, group.workspace)
 				if err != nil {
 					log.Error(err, "Failed to ensure workspace PVC for Branch")
 					return ctrl.Result{}, err
@@ -586,11 +586,16 @@ func normalizeWorkspaceMountPath(mountPath string) string {
 	return mountPath
 }
 
-func workspaceClaimNameForTarget(branch *terrakojoiov1alpha1.Branch, target workflowTarget) string {
+func workspaceClaimNameForTarget(
+	branch *terrakojoiov1alpha1.Branch,
+	templateName string,
+	target workflowTarget,
+) string {
 	key := fmt.Sprintf(
-		"%s|%s|%s|%s",
+		"%s|%s|%s|%s|%s",
 		branch.UID,
 		branch.Spec.SHA,
+		templateName,
 		normalizeExecutionUnit(target.executionUnit),
 		target.path,
 	)
@@ -601,10 +606,11 @@ func workspaceClaimNameForTarget(branch *terrakojoiov1alpha1.Branch, target work
 func (r *BranchReconciler) ensureWorkspacePVC(
 	ctx context.Context,
 	branch *terrakojoiov1alpha1.Branch,
+	templateName string,
 	target workflowTarget,
 	workspace terrakojoiov1alpha1.WorkflowWorkspaceSpec,
 ) (string, error) {
-	claimName := workspaceClaimNameForTarget(branch, target)
+	claimName := workspaceClaimNameForTarget(branch, templateName, target)
 	key := client.ObjectKey{Name: claimName, Namespace: branch.Namespace}
 	var existing corev1.PersistentVolumeClaim
 	if err := r.Get(ctx, key, &existing); err == nil {

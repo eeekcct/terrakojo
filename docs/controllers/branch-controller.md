@@ -82,7 +82,7 @@ for default and non-default branches.
   - `file`: create one `Workflow` per matched file path.
 - if `WorkflowTemplate.spec.workspace.enabled=true`:
   - create/get a target-scoped PVC for the current branch SHA;
-  - the same target PVC is reused across templates for identical `branch+sha+executionUnit+path`;
+  - PVC scope is `branch+sha+template+executionUnit+path` (not shared across templates);
   - defaults: `mountPath=/workspace`, `size=5Mi` when unspecified;
   - pass claim name and mount path through workflow parameters.
 - each created Workflow gets:
