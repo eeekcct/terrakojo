@@ -69,14 +69,14 @@ corresponding GitHub Check Run status/conclusion.
 - map phase to Check Run status/conclusion and call `UpdateCheckRun`;
 - if phase changed, update workflow status with retry-on-conflict.
 1. If Job does not exist:
-- evaluate dependencies from `spec.parameters["dependsOnTemplates"]`:
-  - if dependencies are running/missing, set `DependenciesReady=False` (`WaitingDependencies`) and requeue.
-  - if a dependency has terminal failure (`Failed|Cancelled`), mark workflow `phase=Failed` with `DependenciesReady=False` (`DependencyFailed`) and stop.
-  - if all dependencies succeeded, set `DependenciesReady=True` (`DependenciesSatisfied`) and continue.
 - fetch `WorkflowTemplate`; not found is ignored.
 - build check run name: `<template.displayName>(<workflow.spec.path>)`.
 - create GitHub Check Run (queued).
 - persist `status.checkRunID` and `status.checkRunName` using conflict-retry update.
+- evaluate dependencies from `spec.parameters["dependsOnTemplates"]`:
+  - if dependency workflows are running, set `DependenciesReady=False` (`WaitingDependencies`), update Check Run to `queued`, and requeue.
+  - if a dependency workflow is missing, or has terminal failure (`Failed|Cancelled`), mark workflow `phase=Failed` with `DependenciesReady=False` (`DependencyFailed`), update Check Run to `completed/failure`, and stop.
+  - if all dependencies succeeded, set `DependenciesReady=True` (`DependenciesSatisfied`) and continue.
 - create Job from `template.spec.job`.
 - set workflow as controller owner of the Job.
 - create Job.
@@ -139,6 +139,7 @@ corresponding GitHub Check Run status/conclusion.
 - Branch lookup failure (non-notfound): hard error.
 - Missing branch in normal path: workflow is deleted (best effort).
 - Check Run create/update failures: hard error.
+- Dependency waiting/failure paths still update Check Run (`queued` or `completed/failure`) before returning.
 - Job create/get failures: hard error (except Job creation errors classified as Kubernetes `Invalid` or `Forbidden`, which are treated as terminal success).
 - If Job creation fails after Check Run creation, controller best-effort updates Check Run to `completed/failure` and sets workflow phase to `Failed`.
 - Job creation errors classified as Kubernetes `Invalid` or `Forbidden` are treated as terminal and return success (`nil`) to avoid retry loops and duplicate CheckRuns.
