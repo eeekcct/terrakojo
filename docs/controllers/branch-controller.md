@@ -74,6 +74,9 @@ for default and non-default branches.
 1. If no template matches:
 - default branch: delete branch;
 - non-default branch: update `terrakojo.io/last-sha` and keep.
+1. Order matched templates by `dependsOnTemplates` (dependency-first) before creating Workflows.
+  - dependencies that are not in the matched template set are ignored for ordering.
+  - circular dependencies in the matched template set return an error and stop reconcile.
 1. For each matched template:
 - decide targets from `WorkflowTemplate.spec.match.executionUnit`:
   - `folder` (default): group matched files by folder (`path.Dir`) and create one `Workflow` per folder.

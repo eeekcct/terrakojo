@@ -23,6 +23,7 @@ import (
 	"path"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -258,11 +259,11 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	workflowNames := []string{}
-	templateNames := make([]string, 0, len(groups))
-	for templateName := range groups {
-		templateNames = append(templateNames, templateName)
+	templateNames, err := orderTemplateNamesByDependency(groups)
+	if err != nil {
+		log.Error(err, "Failed to order templates by dependency")
+		return ctrl.Result{}, err
 	}
-	sort.Strings(templateNames)
 	for _, templateName := range templateNames {
 		group := groups[templateName]
 		targets := workflowTargets(group.match.ExecutionUnit, group.files)
@@ -460,6 +461,71 @@ func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedF
 		}
 	}
 	return groups
+}
+
+func orderTemplateNamesByDependency(groups map[string]matchedTemplate) ([]string, error) {
+	if len(groups) == 0 {
+		return nil, nil
+	}
+
+	indegree := make(map[string]int, len(groups))
+	dependents := make(map[string][]string, len(groups))
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		indegree[name] = 0
+		names = append(names, name)
+	}
+
+	for templateName, group := range groups {
+		for _, dependencyName := range group.dependsOnTemplates {
+			if dependencyName == templateName {
+				continue
+			}
+			if _, ok := groups[dependencyName]; !ok {
+				continue
+			}
+			indegree[templateName]++
+			dependents[dependencyName] = append(dependents[dependencyName], templateName)
+		}
+	}
+
+	ready := make([]string, 0, len(names))
+	for _, name := range names {
+		if indegree[name] == 0 {
+			ready = append(ready, name)
+		}
+	}
+	sort.Strings(ready)
+
+	ordered := make([]string, 0, len(names))
+	for len(ready) > 0 {
+		current := ready[0]
+		ready = ready[1:]
+		ordered = append(ordered, current)
+
+		next := dependents[current]
+		sort.Strings(next)
+		for _, dependent := range next {
+			indegree[dependent]--
+			if indegree[dependent] == 0 {
+				ready = append(ready, dependent)
+			}
+		}
+		sort.Strings(ready)
+	}
+
+	if len(ordered) != len(names) {
+		cyclic := make([]string, 0)
+		for _, name := range names {
+			if indegree[name] > 0 {
+				cyclic = append(cyclic, name)
+			}
+		}
+		sort.Strings(cyclic)
+		return nil, fmt.Errorf("circular template dependencies detected: %s", strings.Join(cyclic, ", "))
+	}
+
+	return ordered, nil
 }
 
 func matchTemplate(match terrakojoiov1alpha1.WorkflowMatch, changedFiles []string) []string {

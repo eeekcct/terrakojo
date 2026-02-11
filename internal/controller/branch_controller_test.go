@@ -1688,5 +1688,55 @@ var _ = Describe("Branch Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(parameters).NotTo(HaveKey(workflowParamDependsOn))
 		})
+
+		It("orderTemplateNamesByDependency creates templates in dependency order", func() {
+			groups := map[string]matchedTemplate{
+				"apply": {
+					dependsOnTemplates: []string{"plan"},
+				},
+				"plan": {
+					dependsOnTemplates: []string{"lint"},
+				},
+				"lint": {
+					dependsOnTemplates: nil,
+				},
+				"docs": {
+					dependsOnTemplates: nil,
+				},
+			}
+
+			ordered, err := orderTemplateNamesByDependency(groups)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ordered).To(Equal([]string{"docs", "lint", "plan", "apply"}))
+		})
+
+		It("orderTemplateNamesByDependency ignores dependencies outside matched templates", func() {
+			groups := map[string]matchedTemplate{
+				"apply": {
+					dependsOnTemplates: []string{"plan"},
+				},
+			}
+
+			ordered, err := orderTemplateNamesByDependency(groups)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ordered).To(Equal([]string{"apply"}))
+		})
+
+		It("orderTemplateNamesByDependency returns error on circular dependency", func() {
+			groups := map[string]matchedTemplate{
+				"apply": {
+					dependsOnTemplates: []string{"plan"},
+				},
+				"plan": {
+					dependsOnTemplates: []string{"apply"},
+				},
+			}
+
+			_, err := orderTemplateNamesByDependency(groups)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("circular template dependencies detected"))
+			Expect(err.Error()).To(ContainSubstring("apply"))
+			Expect(err.Error()).To(ContainSubstring("plan"))
+		})
 	})
 })

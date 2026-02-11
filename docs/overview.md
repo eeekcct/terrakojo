@@ -28,6 +28,7 @@
     - `file`: one Workflow per matched file path.
   - Propagates default-branch context and execution unit into each created Workflow as `spec.parameters["isDefaultBranch"]` and `spec.parameters["executionUnit"]`.
   - Propagates template dependency metadata into each Workflow as `spec.parameters["dependsOnTemplates"]`.
+  - Orders matched templates by dependency (`dependsOnTemplates`) before Workflow creation; circular dependencies among matched templates fail reconcile.
   - **Completion cleanup**: when all owned Workflows are terminal (Succeeded/Failed/Cancelled), deletes the Branch only for default-branch commits; non-default branches are kept until GitHub no longer lists them.
   - Uses field index `metadata.ownerReferences.uid` for Workflow lookup.
 
