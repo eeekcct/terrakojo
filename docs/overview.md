@@ -33,7 +33,7 @@
 
 - **WorkflowReconciler** (`internal/controller/workflow_controller.go`)
   - Creates GitHub CheckRun and a Job from `WorkflowTemplate.spec.job`.
-  - Evaluates template dependencies before Job creation: waits while dependencies are running, and fails when dependency workflows are missing/failed/cancelled.
+  - Evaluates template dependencies before Job creation: fails terminally when dependency spec is invalid JSON, waits while dependencies are running, and fails when dependency workflows are missing/failed/cancelled.
   - Injects reserved runtime env vars into all Job containers/initContainers (`TERRAKOJO_*`, including `TERRAKOJO_IS_DEFAULT_BRANCH` and `TERRAKOJO_EXECUTION_UNIT`).
   - Maps Job status → Workflow `phase` and updates CheckRun.
   - Finalizer cancels CheckRun on deletion if Job not finished; if owning Branch is missing, deletes the Workflow.

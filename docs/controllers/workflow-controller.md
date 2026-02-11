@@ -74,6 +74,7 @@ corresponding GitHub Check Run status/conclusion.
 - create GitHub Check Run (queued).
 - persist `status.checkRunID` and `status.checkRunName` using conflict-retry update.
 - evaluate dependencies from `spec.parameters["dependsOnTemplates"]`:
+  - if `dependsOnTemplates` is not a valid JSON array string, mark workflow `phase=Failed` with `DependenciesReady=False` (`InvalidDependencySpec`), update Check Run to `completed/failure`, and stop.
   - if dependency workflows are running, set `DependenciesReady=False` (`WaitingDependencies`), update Check Run to `queued`, and requeue.
   - if a dependency workflow is missing, or has terminal failure (`Failed|Cancelled`), mark workflow `phase=Failed` with `DependenciesReady=False` (`DependencyFailed`), update Check Run to `completed/failure`, and stop.
   - if all dependencies succeeded, set `DependenciesReady=True` (`DependenciesSatisfied`) and continue.

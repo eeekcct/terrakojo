@@ -898,6 +898,102 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
+		It("fails when dependsOnTemplates is invalid JSON and updates checkrun", func() {
+			ctx := context.Background()
+			testScheme := newWorkflowTestScheme()
+
+			workflow := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "workflow-invalid-depends-on",
+					Namespace:  "default",
+					Finalizers: []string{workflowFinalizer},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch-ref",
+					SHA:        "0123456789abcdef0123456789abcdef01234567",
+					Template:   "apply",
+					Path:       "infra/path",
+					Parameters: map[string]string{
+						workflowParamExecutionUnit: "folder",
+						workflowParamDependsOn:     `{}`,
+					},
+				},
+			}
+			branch := &terrakojoiov1alpha1.Branch{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "branch-ref",
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.BranchSpec{
+					Owner:      workflow.Spec.Owner,
+					Repository: workflow.Spec.Repository,
+					Name:       "feature",
+					SHA:        workflow.Spec.SHA,
+				},
+			}
+			template := &terrakojoiov1alpha1.WorkflowTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      workflow.Spec.Template,
+					Namespace: workflow.Namespace,
+				},
+				Spec: terrakojoiov1alpha1.WorkflowTemplateSpec{
+					DisplayName: "Apply",
+					Match:       terrakojoiov1alpha1.WorkflowMatch{Paths: []string{"**/*"}},
+					Job:         newTemplateJobSpec("apply-step", []string{"echo", "apply"}),
+				},
+			}
+
+			fakeClient := newWorkflowFakeClient(testScheme, workflow, branch, template)
+			var createCalled atomic.Bool
+			var gotStatus, gotConclusion string
+			checkRunID := int64(203)
+			ghManager := &fakeGitHubClientManager{
+				GetClientForBranchFunc: func(ctx context.Context, branch *terrakojoiov1alpha1.Branch) (gh.ClientInterface, error) {
+					return &fakeGitHubClient{
+						CreateCheckRunFunc: func(owner, repo, sha, name string) (*ghapi.CheckRun, error) {
+							createCalled.Store(true)
+							return &ghapi.CheckRun{ID: &checkRunID}, nil
+						},
+						UpdateCheckRunFunc: func(owner, repo string, checkRunID int64, name, status, conclusion string) error {
+							gotStatus = status
+							gotConclusion = conclusion
+							return nil
+						},
+					}, nil
+				},
+			}
+			reconciler := &WorkflowReconciler{
+				Client:              fakeClient,
+				Scheme:              testScheme,
+				GitHubClientManager: ghManager,
+			}
+
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workflow)})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(time.Duration(0)))
+			Expect(createCalled.Load()).To(BeTrue())
+			Expect(gotStatus).To(Equal(checkRunStatusCompleted))
+			Expect(gotConclusion).To(Equal("failure"))
+
+			updated := &terrakojoiov1alpha1.Workflow{}
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(workflow), updated)).To(Succeed())
+			Expect(updated.Status.CheckRunID).To(Equal(int(checkRunID)))
+			Expect(updated.Status.CheckRunName).To(Equal("Apply(infra/path)"))
+			Expect(updated.Status.Phase).To(Equal(string(WorkflowPhaseFailed)))
+
+			dependenciesCondition := meta.FindStatusCondition(updated.Status.Conditions, "DependenciesReady")
+			Expect(dependenciesCondition).NotTo(BeNil())
+			Expect(dependenciesCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(dependenciesCondition.Reason).To(Equal("InvalidDependencySpec"))
+			Expect(dependenciesCondition.Message).To(ContainSubstring(workflowParamDependsOn))
+
+			job := &batchv1.Job{}
+			err = fakeClient.Get(ctx, client.ObjectKey{Name: workflow.Name, Namespace: workflow.Namespace}, job)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
 		It("reuses existing checkrun when status already has checkrun id", func() {
 			ctx := context.Background()
 			testScheme := newWorkflowTestScheme()
@@ -2537,7 +2633,7 @@ var _ = Describe("Workflow Controller", func() {
 		})
 
 		It("parseDependsOnTemplates parses and normalizes dependency templates", func() {
-			dependsOn, err := parseDependsOnTemplates(`["apply","plan","apply"]`)
+			dependsOn, err := parseDependsOnTemplates(`[" apply ","plan",""," ","apply"]`)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dependsOn).To(Equal([]string{"apply", "plan"}))
 

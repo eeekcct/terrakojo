@@ -262,7 +262,24 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	dependsOnTemplates, err := parseDependsOnTemplates(workflow.Spec.Parameters[workflowParamDependsOn])
 	if err != nil {
-		return ctrl.Result{}, err
+		failedStatus, failedConclusion := r.checkRunStatus(WorkflowPhaseFailed)
+		if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, failedStatus, failedConclusion); err != nil {
+			return ctrl.Result{}, err
+		}
+		parseErr := err
+		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+			latest.Status.Phase = string(WorkflowPhaseFailed)
+			r.setCondition(
+				latest,
+				"DependenciesReady",
+				metav1.ConditionFalse,
+				"InvalidDependencySpec",
+				parseErr.Error(),
+			)
+		}); err != nil && client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 	if len(dependsOnTemplates) > 0 {
 		ready, failedDeps, waitingDeps, err := r.evaluateTemplateDependencies(ctx, &workflow, dependsOnTemplates)
@@ -530,7 +547,15 @@ func parseDependsOnTemplates(raw string) ([]string, error) {
 	if err := json.Unmarshal([]byte(raw), &dependsOn); err != nil {
 		return nil, fmt.Errorf("failed to parse %s: %w", workflowParamDependsOn, err)
 	}
-	return uniqueSortedStrings(dependsOn), nil
+	normalized := make([]string, 0, len(dependsOn))
+	for _, dependencyTemplate := range dependsOn {
+		trimmed := strings.TrimSpace(dependencyTemplate)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return uniqueSortedStrings(normalized), nil
 }
 
 func (r *WorkflowReconciler) evaluateTemplateDependencies(
