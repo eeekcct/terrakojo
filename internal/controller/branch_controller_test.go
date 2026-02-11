@@ -106,6 +106,7 @@ func attachRepositoryOwnerReference(branch *terrakojoiov1alpha1.Branch, repo *te
 func newBranchTestScheme() *runtime.Scheme {
 	testScheme := runtime.NewScheme()
 	Expect(terrakojoiov1alpha1.AddToScheme(testScheme)).To(Succeed())
+	Expect(corev1.AddToScheme(testScheme)).To(Succeed())
 	return testScheme
 }
 
@@ -1587,8 +1588,10 @@ var _ = Describe("Branch Controller", func() {
 				"template",
 				"workflow",
 				"path",
-				false,
-				terrakojoiov1alpha1.WorkflowExecutionUnitFolder,
+				map[string]string{
+					workflowParamIsDefaultBranch: "false",
+					workflowParamExecutionUnit:   string(terrakojoiov1alpha1.WorkflowExecutionUnitFolder),
+				},
 			)
 			Expect(err).To(HaveOccurred())
 		})
@@ -1620,8 +1623,10 @@ var _ = Describe("Branch Controller", func() {
 				"template",
 				"workflow-",
 				".",
-				true,
-				terrakojoiov1alpha1.WorkflowExecutionUnitRepository,
+				map[string]string{
+					workflowParamIsDefaultBranch: "true",
+					workflowParamExecutionUnit:   string(terrakojoiov1alpha1.WorkflowExecutionUnitRepository),
+				},
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(createdName).NotTo(BeEmpty())
@@ -1649,6 +1654,19 @@ var _ = Describe("Branch Controller", func() {
 			Expect(targets[0].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
 			Expect(targets[1].path).To(Equal("infrastructure/db"))
 			Expect(targets[1].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
+		})
+
+		It("buildWorkflowParameters encodes sorted dependency templates", func() {
+			parameters, err := buildWorkflowParameters(
+				true,
+				terrakojoiov1alpha1.WorkflowExecutionUnitFile,
+				[]string{"apply", "plan", "apply"},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(parameters).To(HaveKeyWithValue(workflowParamIsDefaultBranch, "true"))
+			Expect(parameters).To(HaveKeyWithValue(workflowParamExecutionUnit, "file"))
+			Expect(parameters).To(HaveKey(workflowParamDependsOn))
+			Expect(parameters[workflowParamDependsOn]).To(Equal(`["apply","plan"]`))
 		})
 	})
 })

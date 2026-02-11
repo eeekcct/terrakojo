@@ -28,6 +28,7 @@ corresponding GitHub Check Run status/conclusion.
 - `spec.path`
 - `spec.parameters["isDefaultBranch"]` (optional string; passed through to env as-is; empty string if absent; typically `"true"`/`"false"`)
 - `spec.parameters["executionUnit"]` (optional string; passed through to env as-is; empty string if absent; commonly `"folder"`/`"repository"`/`"file"`)
+- `spec.parameters["dependsOnTemplates"]` (optional JSON array string of template names)
 - Workflow status fields used:
 - `status.checkRunID`
 - `status.checkRunName`
@@ -68,6 +69,10 @@ corresponding GitHub Check Run status/conclusion.
 - map phase to Check Run status/conclusion and call `UpdateCheckRun`;
 - if phase changed, update workflow status with retry-on-conflict.
 1. If Job does not exist:
+- evaluate dependencies from `spec.parameters["dependsOnTemplates"]`:
+  - if dependencies are running/missing, set `DependenciesReady=False` (`WaitingDependencies`) and requeue.
+  - if a dependency has terminal failure (`Failed|Cancelled`), mark workflow `phase=Failed` with `DependenciesReady=False` (`DependencyFailed`) and stop.
+  - if all dependencies succeeded, set `DependenciesReady=True` (`DependenciesSatisfied`) and continue.
 - fetch `WorkflowTemplate`; not found is ignored.
 - build check run name: `<template.displayName>(<workflow.spec.path>)`.
 - create GitHub Check Run (queued).
@@ -163,6 +168,7 @@ Important log events:
 - `status.jobs` is a legacy compatibility field; the controller neither uses it for control decisions nor actively maintains it.
 - Default-branch context for job scripts should be read from `TERRAKOJO_IS_DEFAULT_BRANCH` instead of hard-coding branch names.
 - Workflow unit context for job scripts should be read from `TERRAKOJO_EXECUTION_UNIT`.
+- Template dependency gating is driven by `spec.parameters["dependsOnTemplates"]`, scoped to the same owner/repository/branch/sha/path/executionUnit.
 
 ## Test Coverage Map
 Primary tests: `internal/controller/workflow_controller_test.go`

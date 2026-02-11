@@ -2322,6 +2322,71 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(executionUnitValue).To(Equal("weird"))
 		})
 
+		It("parseDependsOnTemplates parses and normalizes dependency templates", func() {
+			dependsOn, err := parseDependsOnTemplates(`["apply","plan","apply"]`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dependsOn).To(Equal([]string{"apply", "plan"}))
+
+			_, err = parseDependsOnTemplates(`{}`)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("evaluateTemplateDependencies reports waiting and failed dependencies", func() {
+			testScheme := newWorkflowTestScheme()
+			current := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "current", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "apply",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+			}
+			waitingDep := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "dep-plan-waiting", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "plan",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseRunning)},
+			}
+			failedDep := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "dep-security-failed", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "security",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseFailed)},
+			}
+			reconciler := &WorkflowReconciler{
+				Client: newWorkflowFakeClient(testScheme, current, waitingDep, failedDep),
+				Scheme: testScheme,
+			}
+
+			ready, failedDeps, waitingDeps, err := reconciler.evaluateTemplateDependencies(
+				context.Background(),
+				current,
+				[]string{"plan", "security"},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeFalse())
+			Expect(failedDeps).To(Equal([]string{"security"}))
+			Expect(waitingDeps).To(Equal([]string{"plan"}))
+		})
+
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {
 			reconciler := &WorkflowReconciler{}
 			workflow := &terrakojoiov1alpha1.Workflow{}

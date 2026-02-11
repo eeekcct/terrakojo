@@ -29,6 +29,7 @@ for default and non-default branches.
 - Workflow parameter key written by this controller:
 - `spec.parameters["isDefaultBranch"]` (`"true"` when `branch.spec.name == repo.spec.defaultBranch`, otherwise `"false"`).
 - `spec.parameters["executionUnit"]` (`"folder"`/`"repository"`/`"file"`) from `WorkflowTemplate.spec.match.executionUnit` with fallback to `"folder"`.
+- `spec.parameters["dependsOnTemplates"]` (JSON array string copied from `WorkflowTemplate.spec.dependsOnTemplates`).
 - Required dependency:
 - `GitHubClientManager` (`GetClientForBranch` must succeed).
 - Required related resources:
@@ -81,6 +82,7 @@ for default and non-default branches.
 - each created Workflow gets:
   - `spec.parameters["isDefaultBranch"]` as a snapshot of branch classification at creation time.
   - `spec.parameters["executionUnit"]` as a normalized snapshot (`folder|repository|file`).
+  - `spec.parameters["dependsOnTemplates"]` as sorted unique template names (JSON array string).
 1. Update branch annotation `terrakojo.io/last-sha = spec.sha`.
 1. Update branch status:
 - `status.workflows` (created workflow names),

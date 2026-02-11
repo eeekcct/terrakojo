@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
@@ -269,14 +270,22 @@ func (r *BranchReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			continue
 		}
 		for _, target := range targets {
+			parameters, err := buildWorkflowParameters(
+				isDefaultBranch,
+				target.executionUnit,
+				group.dependsOnTemplates,
+			)
+			if err != nil {
+				log.Error(err, "Failed to build workflow parameters for Branch")
+				return ctrl.Result{}, err
+			}
 			createdName, err := r.createWorkflowForBranch(
 				ctx,
 				&branch,
 				templateName,
 				fmt.Sprintf("%s-", templateName),
 				target.path,
-				isDefaultBranch,
-				target.executionUnit,
+				parameters,
 			)
 			if err != nil {
 				log.Error(err, "Failed to create Workflow for Branch")
@@ -375,10 +384,8 @@ func (r *BranchReconciler) createWorkflowForBranch(
 	templateName,
 	workflowGenerateName,
 	workflowPath string,
-	isDefaultBranch bool,
-	executionUnit terrakojoiov1alpha1.WorkflowExecutionUnit,
+	parameters map[string]string,
 ) (string, error) {
-	executionUnit = normalizeExecutionUnit(executionUnit)
 	workflow := &terrakojoiov1alpha1.Workflow{
 		ObjectMeta: ctrl.ObjectMeta{
 			GenerateName: workflowGenerateName,
@@ -394,10 +401,7 @@ func (r *BranchReconciler) createWorkflowForBranch(
 			SHA:        branch.Spec.SHA,
 			Template:   templateName,
 			Path:       workflowPath,
-			Parameters: map[string]string{
-				workflowParamIsDefaultBranch: strconv.FormatBool(isDefaultBranch),
-				workflowParamExecutionUnit:   string(executionUnit),
-			},
+			Parameters: parameters,
 		},
 	}
 	if err := controllerutil.SetControllerReference(branch, workflow, r.Scheme); err != nil {
@@ -432,8 +436,9 @@ func (r *BranchReconciler) deleteWorkflowsForBranch(ctx context.Context, branch 
 }
 
 type matchedTemplate struct {
-	match terrakojoiov1alpha1.WorkflowMatch
-	files []string
+	match              terrakojoiov1alpha1.WorkflowMatch
+	files              []string
+	dependsOnTemplates []string
 }
 
 type workflowTarget struct {
@@ -446,9 +451,11 @@ func matchTemplates(templates terrakojoiov1alpha1.WorkflowTemplateList, changedF
 	for _, t := range templates.Items {
 		files := matchTemplate(t.Spec.Match, changedFiles)
 		if len(files) > 0 {
+			dependsOn := uniqueSortedStrings(t.Spec.DependsOnTemplates)
 			groups[t.Name] = matchedTemplate{
-				match: t.Spec.Match,
-				files: files,
+				match:              t.Spec.Match,
+				files:              files,
+				dependsOnTemplates: dependsOn,
 			}
 		}
 	}
@@ -540,6 +547,25 @@ func uniqueSortedStrings(values []string) []string {
 	}
 	sort.Strings(unique)
 	return unique
+}
+
+func buildWorkflowParameters(
+	isDefaultBranch bool,
+	executionUnit terrakojoiov1alpha1.WorkflowExecutionUnit,
+	dependsOnTemplates []string,
+) (map[string]string, error) {
+	parameters := map[string]string{
+		workflowParamIsDefaultBranch: strconv.FormatBool(isDefaultBranch),
+		workflowParamExecutionUnit:   string(normalizeExecutionUnit(executionUnit)),
+	}
+	if len(dependsOnTemplates) > 0 {
+		encodedDependsOn, err := json.Marshal(uniqueSortedStrings(dependsOnTemplates))
+		if err != nil {
+			return nil, err
+		}
+		parameters[workflowParamDependsOn] = string(encodedDependsOn)
+	}
+	return parameters, nil
 }
 
 // listWorkflowsForBranch returns workflows owned by the branch using the UID field index.

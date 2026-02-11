@@ -37,6 +37,14 @@ type WorkflowTemplateSpec struct {
 	// +required
 	Match WorkflowMatch `json:"match"`
 
+	// DependsOnTemplates defines template-level dependencies within the same
+	// owner/repository/branch/sha/target scope.
+	// Workflows from this template wait until the listed template workflows
+	// reach Succeeded.
+	// +optional
+	// +listType=set
+	DependsOnTemplates []string `json:"dependsOnTemplates,omitempty"`
+
 	// +required
 	Job batchv1.JobSpec `json:"job"`
 }

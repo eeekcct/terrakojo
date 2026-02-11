@@ -50,6 +50,16 @@ spec:
           spec:
             description: spec defines the desired state of WorkflowTemplate
             properties:
+              dependsOnTemplates:
+                description: |-
+                  DependsOnTemplates defines template-level dependencies within the same
+                  owner/repository/branch/sha/target scope.
+                  Workflows from this template wait until the listed template workflows
+                  reach Succeeded.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
               displayName:
                 type: string
               job:

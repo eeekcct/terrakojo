@@ -449,6 +449,11 @@ func (in *WorkflowTemplateList) DeepCopyObject() runtime.Object {
 func (in *WorkflowTemplateSpec) DeepCopyInto(out *WorkflowTemplateSpec) {
 	*out = *in
 	in.Match.DeepCopyInto(&out.Match)
+	if in.DependsOnTemplates != nil {
+		in, out := &in.DependsOnTemplates, &out.DependsOnTemplates
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	in.Job.DeepCopyInto(&out.Job)
 }
 

@@ -7,7 +7,8 @@
   - Controller-managed parameter keys:
     - `spec.parameters["isDefaultBranch"]` (`"true"`/`"false"`).
     - `spec.parameters["executionUnit"]` (`"folder"|"repository"|"file"`).
-- **WorkflowTemplate**: spec `{displayName, match.paths[], match.executionUnit?, job}`.
+    - `spec.parameters["dependsOnTemplates"]` (JSON array string).
+- **WorkflowTemplate**: spec `{displayName, match.paths[], match.executionUnit?, dependsOnTemplates[]?, job}`.
 
 ## Controllers
 - **RepositoryReconciler** (`internal/controller/repository_controller.go`)
@@ -26,11 +27,13 @@
     - `repository`: one Workflow with path `"."`.
     - `file`: one Workflow per matched file path.
   - Propagates default-branch context and execution unit into each created Workflow as `spec.parameters["isDefaultBranch"]` and `spec.parameters["executionUnit"]`.
+  - Propagates template dependency metadata into each Workflow as `spec.parameters["dependsOnTemplates"]`.
   - **Completion cleanup**: when all owned Workflows are terminal (Succeeded/Failed/Cancelled), deletes the Branch only for default-branch commits; non-default branches are kept until GitHub no longer lists them.
   - Uses field index `metadata.ownerReferences.uid` for Workflow lookup.
 
 - **WorkflowReconciler** (`internal/controller/workflow_controller.go`)
   - Creates GitHub CheckRun and a Job from `WorkflowTemplate.spec.job`.
+  - Evaluates template dependencies before Job creation and waits/fails based on dependency workflow phases.
   - Injects reserved runtime env vars into all Job containers/initContainers (`TERRAKOJO_*`, including `TERRAKOJO_IS_DEFAULT_BRANCH` and `TERRAKOJO_EXECUTION_UNIT`).
   - Maps Job status → Workflow `phase` and updates CheckRun.
   - Finalizer cancels CheckRun on deletion if Job not finished; if owning Branch is missing, deletes the Workflow.

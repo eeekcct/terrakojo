@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -193,6 +195,58 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			}
 		}
 		return ctrl.Result{}, nil
+	}
+
+	dependsOnTemplates, err := parseDependsOnTemplates(workflow.Spec.Parameters[workflowParamDependsOn])
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(dependsOnTemplates) > 0 {
+		ready, failedDeps, waitingDeps, err := r.evaluateTemplateDependencies(ctx, &workflow, dependsOnTemplates)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if len(failedDeps) > 0 {
+			if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+				latest.Status.Phase = string(WorkflowPhaseFailed)
+				r.setCondition(
+					latest,
+					"DependenciesReady",
+					metav1.ConditionFalse,
+					"DependencyFailed",
+					fmt.Sprintf("Dependency templates failed: %s", strings.Join(failedDeps, ", ")),
+				)
+			}); err != nil && client.IgnoreNotFound(err) != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+		if !ready {
+			if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+				latest.Status.Phase = string(WorkflowPhasePending)
+				r.setCondition(
+					latest,
+					"DependenciesReady",
+					metav1.ConditionFalse,
+					"WaitingDependencies",
+					fmt.Sprintf("Waiting for dependency templates: %s", strings.Join(waitingDeps, ", ")),
+				)
+			}); err != nil && client.IgnoreNotFound(err) != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+			r.setCondition(
+				latest,
+				"DependenciesReady",
+				metav1.ConditionTrue,
+				"DependenciesSatisfied",
+				fmt.Sprintf("Dependency templates are ready: %s", strings.Join(dependsOnTemplates, ", ")),
+			)
+		}); err != nil && client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	var template terrakojoiov1alpha1.WorkflowTemplate
@@ -458,6 +512,91 @@ func reservedRuntimeEnv(workflow *terrakojoiov1alpha1.Workflow, branch *terrakoj
 		{Name: "TERRAKOJO_EXECUTION_UNIT", Value: executionUnit},
 		{Name: "TERRAKOJO_IS_DEFAULT_BRANCH", Value: isDefaultBranch},
 	}
+}
+
+func parseDependsOnTemplates(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var dependsOn []string
+	if err := json.Unmarshal([]byte(raw), &dependsOn); err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", workflowParamDependsOn, err)
+	}
+	return uniqueSortedStrings(dependsOn), nil
+}
+
+func (r *WorkflowReconciler) evaluateTemplateDependencies(
+	ctx context.Context,
+	workflow *terrakojoiov1alpha1.Workflow,
+	dependsOnTemplates []string,
+) (bool, []string, []string, error) {
+	var workflows terrakojoiov1alpha1.WorkflowList
+	if err := r.List(ctx, &workflows, client.InNamespace(workflow.Namespace)); err != nil {
+		return false, nil, nil, err
+	}
+
+	executionUnit := workflow.Spec.Parameters[workflowParamExecutionUnit]
+	waitingDependencies := []string{}
+	failedDependencies := []string{}
+	for _, dependencyTemplate := range dependsOnTemplates {
+		if dependencyTemplate == workflow.Spec.Template {
+			continue
+		}
+
+		hasCandidate := false
+		hasSucceeded := false
+		hasFailed := false
+		for _, candidate := range workflows.Items {
+			if candidate.Name == workflow.Name {
+				continue
+			}
+			if !sameWorkflowScope(workflow, &candidate, executionUnit, dependencyTemplate) {
+				continue
+			}
+
+			hasCandidate = true
+			switch candidate.Status.Phase {
+			case string(WorkflowPhaseSucceeded):
+				hasSucceeded = true
+			case string(WorkflowPhaseFailed), string(WorkflowPhaseCancelled):
+				hasFailed = true
+			}
+		}
+
+		if hasSucceeded {
+			continue
+		}
+		if hasFailed {
+			failedDependencies = append(failedDependencies, dependencyTemplate)
+			continue
+		}
+		if !hasCandidate {
+			waitingDependencies = append(waitingDependencies, dependencyTemplate)
+			continue
+		}
+		waitingDependencies = append(waitingDependencies, dependencyTemplate)
+	}
+
+	return len(waitingDependencies) == 0 && len(failedDependencies) == 0, failedDependencies, waitingDependencies, nil
+}
+
+func sameWorkflowScope(
+	current *terrakojoiov1alpha1.Workflow,
+	candidate *terrakojoiov1alpha1.Workflow,
+	executionUnit string,
+	templateName string,
+) bool {
+	if candidate.Spec.Template != templateName {
+		return false
+	}
+	if candidate.Spec.Owner != current.Spec.Owner ||
+		candidate.Spec.Repository != current.Spec.Repository ||
+		candidate.Spec.Branch != current.Spec.Branch ||
+		candidate.Spec.SHA != current.Spec.SHA ||
+		candidate.Spec.Path != current.Spec.Path {
+		return false
+	}
+	return candidate.Spec.Parameters[workflowParamExecutionUnit] == executionUnit
 }
 
 func mergeEnvWithReserved(existing, reserved []corev1.EnvVar) []corev1.EnvVar {
