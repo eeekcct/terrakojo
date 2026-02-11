@@ -696,6 +696,9 @@ var _ = Describe("Workflow Controller", func() {
 					Name:       "workflow-wait-dependency",
 					Namespace:  "default",
 					Finalizers: []string{workflowFinalizer},
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "branch-owner-a",
+					},
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      "owner",
@@ -737,6 +740,9 @@ var _ = Describe("Workflow Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "workflow-plan-running",
 					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "branch-owner-a",
+					},
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      workflow.Spec.Owner,
@@ -817,6 +823,9 @@ var _ = Describe("Workflow Controller", func() {
 					Name:       "workflow-dependency-satisfied",
 					Namespace:  "default",
 					Finalizers: []string{workflowFinalizer},
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "branch-owner-a",
+					},
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      "owner",
@@ -858,6 +867,9 @@ var _ = Describe("Workflow Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "workflow-plan-succeeded",
 					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "branch-owner-a",
+					},
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      workflow.Spec.Owner,
@@ -933,6 +945,9 @@ var _ = Describe("Workflow Controller", func() {
 					Name:       "workflow-missing-dependency",
 					Namespace:  "default",
 					Finalizers: []string{workflowFinalizer},
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "branch-owner-a",
+					},
 				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      "owner",
@@ -2777,15 +2792,16 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("effectiveTemplateDependencies filters current template from dependencies", func() {
-			effective := effectiveTemplateDependencies([]string{"apply", "plan", "security"}, "apply")
-			Expect(effective).To(Equal([]string{"plan", "security"}))
-		})
-
 		It("evaluateTemplateDependencies reports waiting and failed dependencies", func() {
 			testScheme := newWorkflowTestScheme()
 			current := &terrakojoiov1alpha1.Workflow{
-				ObjectMeta: metav1.ObjectMeta{Name: "current", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "current",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-a",
+					},
+				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      "owner",
 					Repository: "repo",
@@ -2797,7 +2813,13 @@ var _ = Describe("Workflow Controller", func() {
 				},
 			}
 			waitingDep := &terrakojoiov1alpha1.Workflow{
-				ObjectMeta: metav1.ObjectMeta{Name: "dep-plan-waiting", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-plan-waiting",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-a",
+					},
+				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      "owner",
 					Repository: "repo",
@@ -2810,7 +2832,13 @@ var _ = Describe("Workflow Controller", func() {
 				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseRunning)},
 			}
 			failedDep := &terrakojoiov1alpha1.Workflow{
-				ObjectMeta: metav1.ObjectMeta{Name: "dep-security-failed", Namespace: "default"},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-security-failed",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-a",
+					},
+				},
 				Spec: terrakojoiov1alpha1.WorkflowSpec{
 					Owner:      "owner",
 					Repository: "repo",
@@ -2831,11 +2859,87 @@ var _ = Describe("Workflow Controller", func() {
 				context.Background(),
 				current,
 				[]string{"plan", "security", "lint"},
+				"",
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 			Expect(failedDeps).To(Equal([]string{"security", "lint"}))
 			Expect(waitingDeps).To(Equal([]string{"plan"}))
+		})
+
+		It("evaluateTemplateDependencies treats dependency as ready when any candidate succeeded", func() {
+			testScheme := newWorkflowTestScheme()
+			current := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "current",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-a",
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "apply",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+			}
+			succeededDep := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-plan-succeeded",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-a",
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "plan",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseSucceeded)},
+			}
+			failedDep := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-plan-failed",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-a",
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "plan",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseFailed)},
+			}
+			reconciler := &WorkflowReconciler{
+				Client: newWorkflowFakeClient(testScheme, current, succeededDep, failedDep),
+				Scheme: testScheme,
+			}
+
+			ready, failedDeps, waitingDeps, err := reconciler.evaluateTemplateDependencies(
+				context.Background(),
+				current,
+				[]string{"plan"},
+				"",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeTrue())
+			Expect(failedDeps).To(BeEmpty())
+			Expect(waitingDeps).To(BeEmpty())
 		})
 
 		It("evaluateTemplateDependencies scopes candidates by owner-uid label when present", func() {
@@ -2886,6 +2990,7 @@ var _ = Describe("Workflow Controller", func() {
 				context.Background(),
 				current,
 				[]string{"plan"},
+				"",
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
@@ -2950,11 +3055,119 @@ var _ = Describe("Workflow Controller", func() {
 				context.Background(),
 				current,
 				[]string{"plan"},
+				"",
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 			Expect(failedDeps).To(Equal([]string{"plan"}))
 			Expect(waitingDeps).To(BeEmpty())
+		})
+
+		It("evaluateTemplateDependencies falls back to branch owner UID scope", func() {
+			testScheme := newWorkflowTestScheme()
+			controllerTrue := true
+			current := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "current", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "apply",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+			}
+			sameBranchOwnerDep := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-plan-succeeded-same-branch-owner",
+					Namespace: "default",
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Kind:       "Branch",
+							UID:        types.UID("branch-owner-a"),
+							Controller: &controllerTrue,
+						},
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "plan",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseSucceeded)},
+			}
+			otherBranchOwnerDep := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-plan-failed-other-branch-owner",
+					Namespace: "default",
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							Kind:       "Branch",
+							UID:        types.UID("branch-owner-b"),
+							Controller: &controllerTrue,
+						},
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "plan",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseFailed)},
+			}
+			reconciler := &WorkflowReconciler{
+				Client: newWorkflowFakeClient(testScheme, current, sameBranchOwnerDep, otherBranchOwnerDep),
+				Scheme: testScheme,
+			}
+
+			ready, failedDeps, waitingDeps, err := reconciler.evaluateTemplateDependencies(
+				context.Background(),
+				current,
+				[]string{"plan"},
+				"branch-owner-a",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeTrue())
+			Expect(failedDeps).To(BeEmpty())
+			Expect(waitingDeps).To(BeEmpty())
+		})
+
+		It("evaluateTemplateDependencies returns error when dependency scope is unavailable", func() {
+			testScheme := newWorkflowTestScheme()
+			current := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "current", Namespace: "default"},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "apply",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+			}
+			reconciler := &WorkflowReconciler{
+				Client: newWorkflowFakeClient(testScheme, current),
+				Scheme: testScheme,
+			}
+
+			_, _, _, err := reconciler.evaluateTemplateDependencies(
+				context.Background(),
+				current,
+				[]string{"plan"},
+				"",
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("dependency evaluation scope unavailable"))
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {

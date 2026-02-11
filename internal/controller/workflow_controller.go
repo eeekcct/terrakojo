@@ -296,7 +296,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				return ctrl.Result{}, err
 			}
 		} else {
-			ready, failedDeps, waitingDeps, err := r.evaluateTemplateDependencies(ctx, &workflow, effectiveDependsOnTemplates)
+			ready, failedDeps, waitingDeps, err := r.evaluateTemplateDependencies(ctx, &workflow, effectiveDependsOnTemplates, string(branch.UID))
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -588,6 +588,7 @@ func (r *WorkflowReconciler) evaluateTemplateDependencies(
 	ctx context.Context,
 	workflow *terrakojoiov1alpha1.Workflow,
 	dependsOnTemplates []string,
+	branchOwnerUID string,
 ) (bool, []string, []string, error) {
 	var workflows terrakojoiov1alpha1.WorkflowList
 	listOptions := []client.ListOption{
@@ -595,17 +596,12 @@ func (r *WorkflowReconciler) evaluateTemplateDependencies(
 	}
 	if ownerUID, ok := workflow.Labels["terrakojo.io/owner-uid"]; ok && ownerUID != "" {
 		listOptions = append(listOptions, client.MatchingLabels{"terrakojo.io/owner-uid": ownerUID})
+	} else if controllerOwnerUID := controllerOwnerUIDForWorkflow(workflow); controllerOwnerUID != "" {
+		listOptions = append(listOptions, client.MatchingFields{"metadata.ownerReferences.uid": controllerOwnerUID})
+	} else if branchOwnerUID != "" {
+		listOptions = append(listOptions, client.MatchingFields{"metadata.ownerReferences.uid": branchOwnerUID})
 	} else {
-		var controllerOwnerUID string
-		for _, ref := range workflow.OwnerReferences {
-			if ref.Controller != nil && *ref.Controller {
-				controllerOwnerUID = string(ref.UID)
-				break
-			}
-		}
-		if controllerOwnerUID != "" {
-			listOptions = append(listOptions, client.MatchingFields{"metadata.ownerReferences.uid": controllerOwnerUID})
-		}
+		return false, nil, nil, fmt.Errorf("dependency evaluation scope unavailable: missing owner-uid label and owner reference")
 	}
 	if err := r.List(ctx, &workflows, listOptions...); err != nil {
 		return false, nil, nil, err
@@ -637,6 +633,10 @@ func (r *WorkflowReconciler) evaluateTemplateDependencies(
 			case string(WorkflowPhaseFailed), string(WorkflowPhaseCancelled):
 				hasFailed = true
 			}
+			// Succeeded dependency is definitive; no need to scan further candidates.
+			if hasSucceeded {
+				break
+			}
 		}
 
 		if hasSucceeded {
@@ -654,6 +654,15 @@ func (r *WorkflowReconciler) evaluateTemplateDependencies(
 	}
 
 	return len(waitingDependencies) == 0 && len(failedDependencies) == 0, failedDependencies, waitingDependencies, nil
+}
+
+func controllerOwnerUIDForWorkflow(workflow *terrakojoiov1alpha1.Workflow) string {
+	for _, ownerRef := range workflow.OwnerReferences {
+		if ownerRef.Controller != nil && *ownerRef.Controller {
+			return string(ownerRef.UID)
+		}
+	}
+	return ""
 }
 
 func sameWorkflowScope(
