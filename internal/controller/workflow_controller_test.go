@@ -2788,6 +2788,10 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(dependsOn).To(Equal([]string{"apply", "plan"}))
 
+			_, err = parseDependsOnTemplates(`null`)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("expected a JSON array of templates, but got null"))
+
 			_, err = parseDependsOnTemplates(`{}`)
 			Expect(err).To(HaveOccurred())
 		})

@@ -562,6 +562,10 @@ func parseDependsOnTemplates(raw string) ([]string, error) {
 	if err := json.Unmarshal([]byte(raw), &dependsOn); err != nil {
 		return nil, fmt.Errorf("failed to parse %s: %w", workflowParamDependsOn, err)
 	}
+	// Reject explicit JSON null to keep the parameter contract array-only.
+	if dependsOn == nil {
+		return nil, fmt.Errorf("failed to parse %s: expected a JSON array of templates, but got null", workflowParamDependsOn)
+	}
 	normalized := make([]string, 0, len(dependsOn))
 	for _, dependencyTemplate := range dependsOn {
 		trimmed := strings.TrimSpace(dependencyTemplate)
