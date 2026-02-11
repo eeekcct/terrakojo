@@ -615,10 +615,6 @@ func (r *WorkflowReconciler) evaluateTemplateDependencies(
 	waitingDependencies := []string{}
 	failedDependencies := []string{}
 	for _, dependencyTemplate := range dependsOnTemplates {
-		if dependencyTemplate == workflow.Spec.Template {
-			continue
-		}
-
 		hasCandidate := false
 		hasSucceeded := false
 		hasFailed := false

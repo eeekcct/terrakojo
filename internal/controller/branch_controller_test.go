@@ -1656,11 +1656,11 @@ var _ = Describe("Branch Controller", func() {
 			Expect(targets[1].executionUnit).To(Equal(terrakojoiov1alpha1.WorkflowExecutionUnitFolder))
 		})
 
-		It("buildWorkflowParameters encodes sorted dependency templates", func() {
+		It("buildWorkflowParameters encodes dependency templates", func() {
 			parameters, err := buildWorkflowParameters(
 				true,
 				terrakojoiov1alpha1.WorkflowExecutionUnitFile,
-				[]string{"apply", "plan", "apply"},
+				[]string{"apply", "plan"},
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(parameters).To(HaveKeyWithValue(workflowParamIsDefaultBranch, "true"))

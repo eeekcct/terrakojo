@@ -637,7 +637,7 @@ func buildWorkflowParameters(
 		workflowParamExecutionUnit:   string(normalizeExecutionUnit(executionUnit)),
 	}
 	if len(dependsOnTemplates) > 0 {
-		encodedDependsOn, err := json.Marshal(uniqueSortedStrings(dependsOnTemplates))
+		encodedDependsOn, err := json.Marshal(dependsOnTemplates)
 		if err != nil {
 			return nil, err
 		}
