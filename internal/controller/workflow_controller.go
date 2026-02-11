@@ -268,7 +268,7 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		parseErr := err
 		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
-			latest.Status.Phase = string(WorkflowPhaseFailed)
+			r.setWorkflowPhase(latest, WorkflowPhaseFailed)
 			r.setCondition(
 				latest,
 				"DependenciesReady",
@@ -281,59 +281,74 @@ func (r *WorkflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{}, nil
 	}
+	effectiveDependsOnTemplates := effectiveTemplateDependencies(dependsOnTemplates, workflow.Spec.Template)
 	if len(dependsOnTemplates) > 0 {
-		ready, failedDeps, waitingDeps, err := r.evaluateTemplateDependencies(ctx, &workflow, dependsOnTemplates)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if len(failedDeps) > 0 {
-			failedStatus, failedConclusion := r.checkRunStatus(WorkflowPhaseFailed)
-			if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, failedStatus, failedConclusion); err != nil {
-				return ctrl.Result{}, err
-			}
+		if len(effectiveDependsOnTemplates) == 0 {
 			if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
-				latest.Status.Phase = string(WorkflowPhaseFailed)
 				r.setCondition(
 					latest,
 					"DependenciesReady",
-					metav1.ConditionFalse,
-					"DependencyFailed",
-					fmt.Sprintf("Dependency templates are not ready: %s", strings.Join(failedDeps, ", ")),
+					metav1.ConditionTrue,
+					"DependenciesSatisfied",
+					"No effective dependency templates after self-dependency filtering",
 				)
 			}); err != nil && client.IgnoreNotFound(err) != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{}, nil
-		}
-		if !ready {
-			pendingStatus, pendingConclusion := r.checkRunStatus(WorkflowPhasePending)
-			if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, pendingStatus, pendingConclusion); err != nil {
+		} else {
+			ready, failedDeps, waitingDeps, err := r.evaluateTemplateDependencies(ctx, &workflow, effectiveDependsOnTemplates)
+			if err != nil {
 				return ctrl.Result{}, err
 			}
+			if len(failedDeps) > 0 {
+				failedStatus, failedConclusion := r.checkRunStatus(WorkflowPhaseFailed)
+				if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, failedStatus, failedConclusion); err != nil {
+					return ctrl.Result{}, err
+				}
+				if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+					r.setWorkflowPhase(latest, WorkflowPhaseFailed)
+					r.setCondition(
+						latest,
+						"DependenciesReady",
+						metav1.ConditionFalse,
+						"DependencyFailed",
+						fmt.Sprintf("Dependency templates are not ready: %s", strings.Join(failedDeps, ", ")),
+					)
+				}); err != nil && client.IgnoreNotFound(err) != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, nil
+			}
+			if !ready {
+				pendingStatus, pendingConclusion := r.checkRunStatus(WorkflowPhasePending)
+				if err := ghClient.UpdateCheckRun(owner, repo, checkRunID, checkRunName, pendingStatus, pendingConclusion); err != nil {
+					return ctrl.Result{}, err
+				}
+				if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
+					r.setWorkflowPhase(latest, WorkflowPhasePending)
+					r.setCondition(
+						latest,
+						"DependenciesReady",
+						metav1.ConditionFalse,
+						"WaitingDependencies",
+						fmt.Sprintf("Waiting for dependency templates: %s", strings.Join(waitingDeps, ", ")),
+					)
+				}); err != nil && client.IgnoreNotFound(err) != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
 			if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
-				latest.Status.Phase = string(WorkflowPhasePending)
 				r.setCondition(
 					latest,
 					"DependenciesReady",
-					metav1.ConditionFalse,
-					"WaitingDependencies",
-					fmt.Sprintf("Waiting for dependency templates: %s", strings.Join(waitingDeps, ", ")),
+					metav1.ConditionTrue,
+					"DependenciesSatisfied",
+					fmt.Sprintf("Dependency templates are ready: %s", strings.Join(effectiveDependsOnTemplates, ", ")),
 				)
 			}); err != nil && client.IgnoreNotFound(err) != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		if err := r.updateWorkflowStatusWithRetry(ctx, &workflow, func(latest *terrakojoiov1alpha1.Workflow) {
-			r.setCondition(
-				latest,
-				"DependenciesReady",
-				metav1.ConditionTrue,
-				"DependenciesSatisfied",
-				fmt.Sprintf("Dependency templates are ready: %s", strings.Join(dependsOnTemplates, ", ")),
-			)
-		}); err != nil && client.IgnoreNotFound(err) != nil {
-			return ctrl.Result{}, err
 		}
 	}
 
@@ -558,13 +573,30 @@ func parseDependsOnTemplates(raw string) ([]string, error) {
 	return uniqueSortedStrings(normalized), nil
 }
 
+func effectiveTemplateDependencies(dependsOnTemplates []string, currentTemplate string) []string {
+	effective := make([]string, 0, len(dependsOnTemplates))
+	for _, dependencyTemplate := range dependsOnTemplates {
+		if dependencyTemplate == currentTemplate {
+			continue
+		}
+		effective = append(effective, dependencyTemplate)
+	}
+	return effective
+}
+
 func (r *WorkflowReconciler) evaluateTemplateDependencies(
 	ctx context.Context,
 	workflow *terrakojoiov1alpha1.Workflow,
 	dependsOnTemplates []string,
 ) (bool, []string, []string, error) {
 	var workflows terrakojoiov1alpha1.WorkflowList
-	if err := r.List(ctx, &workflows, client.InNamespace(workflow.Namespace)); err != nil {
+	listOptions := []client.ListOption{
+		client.InNamespace(workflow.Namespace),
+	}
+	if ownerUID, ok := workflow.Labels["terrakojo.io/owner-uid"]; ok && ownerUID != "" {
+		listOptions = append(listOptions, client.MatchingLabels{"terrakojo.io/owner-uid": ownerUID})
+	}
+	if err := r.List(ctx, &workflows, listOptions...); err != nil {
 		return false, nil, nil, err
 	}
 
@@ -736,9 +768,13 @@ func (r *WorkflowReconciler) determineWorkflowPhase(workflow *terrakojoiov1alpha
 
 func (r *WorkflowReconciler) updateWorkflowStatus(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) error {
 	return r.updateWorkflowStatusWithRetry(ctx, workflow, func(latest *terrakojoiov1alpha1.Workflow) {
-		latest.Status.Phase = string(phase)
-		r.setCondition(latest, "JobStatus", metav1.ConditionTrue, string(phase), fmt.Sprintf("Job is in %s state", phase))
+		r.setWorkflowPhase(latest, phase)
 	})
+}
+
+func (r *WorkflowReconciler) setWorkflowPhase(workflow *terrakojoiov1alpha1.Workflow, phase WorkflowPhase) {
+	workflow.Status.Phase = string(phase)
+	r.setCondition(workflow, "JobStatus", metav1.ConditionTrue, string(phase), fmt.Sprintf("Job is in %s state", phase))
 }
 
 func (r *WorkflowReconciler) updateWorkflowStatusWithRetry(ctx context.Context, workflow *terrakojoiov1alpha1.Workflow, mutate func(*terrakojoiov1alpha1.Workflow)) error {

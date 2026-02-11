@@ -797,6 +797,11 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(dependenciesCondition.Reason).To(Equal("WaitingDependencies"))
 			Expect(dependenciesCondition.Message).To(ContainSubstring("plan"))
 
+			jobStatusCondition := meta.FindStatusCondition(updated.Status.Conditions, "JobStatus")
+			Expect(jobStatusCondition).NotTo(BeNil())
+			Expect(jobStatusCondition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(jobStatusCondition.Reason).To(Equal(string(WorkflowPhasePending)))
+
 			job := &batchv1.Job{}
 			err = fakeClient.Get(ctx, client.ObjectKey{Name: workflow.Name, Namespace: workflow.Namespace}, job)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
@@ -821,7 +826,7 @@ var _ = Describe("Workflow Controller", func() {
 					Path:       "infra/path",
 					Parameters: map[string]string{
 						workflowParamExecutionUnit: "folder",
-						workflowParamDependsOn:     `["plan"]`,
+						workflowParamDependsOn:     `["apply","plan"]`,
 					},
 				},
 			}
@@ -912,6 +917,7 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(dependenciesCondition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(dependenciesCondition.Reason).To(Equal("DependenciesSatisfied"))
 			Expect(dependenciesCondition.Message).To(ContainSubstring("plan"))
+			Expect(dependenciesCondition.Message).NotTo(ContainSubstring("apply"))
 
 			job := &batchv1.Job{}
 			Expect(fakeClient.Get(ctx, client.ObjectKey{Name: workflow.Name, Namespace: workflow.Namespace}, job)).To(Succeed())
@@ -1008,6 +1014,11 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(dependenciesCondition.Reason).To(Equal("DependencyFailed"))
 			Expect(dependenciesCondition.Message).To(ContainSubstring("plan"))
 
+			jobStatusCondition := meta.FindStatusCondition(updated.Status.Conditions, "JobStatus")
+			Expect(jobStatusCondition).NotTo(BeNil())
+			Expect(jobStatusCondition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(jobStatusCondition.Reason).To(Equal(string(WorkflowPhaseFailed)))
+
 			job := &batchv1.Job{}
 			err = fakeClient.Get(ctx, client.ObjectKey{Name: workflow.Name, Namespace: workflow.Namespace}, job)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
@@ -1103,6 +1114,11 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(dependenciesCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(dependenciesCondition.Reason).To(Equal("InvalidDependencySpec"))
 			Expect(dependenciesCondition.Message).To(ContainSubstring(workflowParamDependsOn))
+
+			jobStatusCondition := meta.FindStatusCondition(updated.Status.Conditions, "JobStatus")
+			Expect(jobStatusCondition).NotTo(BeNil())
+			Expect(jobStatusCondition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(jobStatusCondition.Reason).To(Equal(string(WorkflowPhaseFailed)))
 
 			job := &batchv1.Job{}
 			err = fakeClient.Get(ctx, client.ObjectKey{Name: workflow.Name, Namespace: workflow.Namespace}, job)
@@ -2760,6 +2776,11 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
+		It("effectiveTemplateDependencies filters current template from dependencies", func() {
+			effective := effectiveTemplateDependencies([]string{"apply", "plan", "security"}, "apply")
+			Expect(effective).To(Equal([]string{"plan", "security"}))
+		})
+
 		It("evaluateTemplateDependencies reports waiting and failed dependencies", func() {
 			testScheme := newWorkflowTestScheme()
 			current := &terrakojoiov1alpha1.Workflow{
@@ -2814,6 +2835,61 @@ var _ = Describe("Workflow Controller", func() {
 			Expect(ready).To(BeFalse())
 			Expect(failedDeps).To(Equal([]string{"security", "lint"}))
 			Expect(waitingDeps).To(Equal([]string{"plan"}))
+		})
+
+		It("evaluateTemplateDependencies scopes candidates by owner-uid label when present", func() {
+			testScheme := newWorkflowTestScheme()
+			current := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "current",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-a",
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "apply",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+			}
+			otherOwnerSucceeded := &terrakojoiov1alpha1.Workflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dep-plan-succeeded-other-owner",
+					Namespace: "default",
+					Labels: map[string]string{
+						"terrakojo.io/owner-uid": "owner-b",
+					},
+				},
+				Spec: terrakojoiov1alpha1.WorkflowSpec{
+					Owner:      "owner",
+					Repository: "repo",
+					Branch:     "branch",
+					SHA:        "sha",
+					Path:       "infra/app",
+					Template:   "plan",
+					Parameters: map[string]string{workflowParamExecutionUnit: "folder"},
+				},
+				Status: terrakojoiov1alpha1.WorkflowStatus{Phase: string(WorkflowPhaseSucceeded)},
+			}
+			reconciler := &WorkflowReconciler{
+				Client: newWorkflowFakeClient(testScheme, current, otherOwnerSucceeded),
+				Scheme: testScheme,
+			}
+
+			ready, failedDeps, waitingDeps, err := reconciler.evaluateTemplateDependencies(
+				context.Background(),
+				current,
+				[]string{"plan"},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ready).To(BeFalse())
+			Expect(failedDeps).To(Equal([]string{"plan"}))
+			Expect(waitingDeps).To(BeEmpty())
 		})
 
 		DescribeTable("determineWorkflowPhase", func(jobStatus batchv1.JobStatus, expected WorkflowPhase) {
