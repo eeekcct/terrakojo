@@ -29,6 +29,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -1691,7 +1692,6 @@ var _ = Describe("Branch Controller", func() {
 			}
 			workspace := terrakojoiov1alpha1.WorkflowWorkspaceSpec{
 				Enabled: true,
-				Size:    "1Gi",
 			}
 			claimNameA, err := reconciler.ensureWorkspacePVC(context.Background(), branch, target, workspace)
 			Expect(err).NotTo(HaveOccurred())
@@ -1707,6 +1707,7 @@ var _ = Describe("Branch Controller", func() {
 			Expect(pvcList.Items[0].Name).To(Equal(claimNameA))
 			Expect(pvcList.Items[0].Labels).To(HaveKeyWithValue(workspaceOwnerLabelKey, string(branch.UID)))
 			Expect(pvcList.Items[0].Annotations).To(HaveKeyWithValue(workspaceSHAAnnotationKey, branch.Spec.SHA))
+			Expect(pvcList.Items[0].Spec.Resources.Requests.Storage().Cmp(resource.MustParse(defaultWorkspaceSize))).To(Equal(0))
 		})
 
 		It("cleanupWorkspacePVCsForBranch removes stale claims for previous sha", func() {
