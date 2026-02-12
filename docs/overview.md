@@ -14,8 +14,9 @@
   - Ensures labels (`terrakojo.io/owner`, `terrakojo.io/repo-name`, `terrakojo.io/repo-uid`, managed-by) and finalizer `terrakojo.io/cleanup-branches`.
   - Creates/updates **Branch** CRs from GitHub directly:
     - Non-default: keeps the latest head per ref (with PR number if open), deletes Branches for refs no longer in GitHub.
-    - Default: compares `status.lastDefaultBranchHeadSha` to head and creates Branch per commit SHA.
+    - Default: on bootstrap (`status.lastDefaultBranchHeadSha` empty or reset requested), stores current HEAD as cutover cursor and does not create historical commit Branches; after bootstrap, compares cursor to head and creates Branch per commit SHA.
   - Updates `status.lastDefaultBranchHeadSha` after successful default-branch sync.
+  - Sets `status.conditions[type=BootstrapReady]` for cutover initialization state.
   - On Repository deletion: deletes owned Branches, waits for completion, then removes finalizer.
 
 - **BranchReconciler** (`internal/controller/branch_controller.go`)
@@ -47,6 +48,8 @@
 - Annotation update with optimistic retry:
   - Sets `terrakojo.io/sync-requested-at` on the matching Repository.
 - Uses labels `terrakojo.io/owner`, `terrakojo.io/repo-name` to find the Repository.
+- Optional operator annotation:
+  - `terrakojo.io/bootstrap-reset=true` requests re-bootstrap of default-branch cutover from current HEAD (controller writes back `done` on success).
 
 ## GitHub Auth Helpers (`internal/kubernetes`)
 - Secrets: PAT (`token`) or GitHub App (`github-app-id`, `github-installation-id`, `github-private-key`).

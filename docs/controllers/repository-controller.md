@@ -16,6 +16,7 @@ It guarantees:
 - No `Owns(&Branch{})` watch is configured.
 - Reconcile triggers:
 - `Repository` create/update/delete events.
+- Annotation changes on `Repository` (for example `terrakojo.io/sync-requested-at`, `terrakojo.io/bootstrap-reset`).
 - Explicit requeue every `30m` (`repositorySyncInterval`) after successful reconcile.
 
 ## Inputs and Dependencies
@@ -52,18 +53,24 @@ It guarantees:
 1. Sync from GitHub:
 - Sync default branch commits:
   - fetch default branch head SHA;
-  - compute commit SHAs between `status.lastDefaultBranchHeadSha` and head;
-  - create one `Branch` per missing SHA (default branch ref);
-  - update `status.lastDefaultBranchHeadSha` to the last processed SHA.
+  - if bootstrapping (`status.lastDefaultBranchHeadSha` is empty, or `terrakojo.io/bootstrap-reset=true`):
+    - set `status.lastDefaultBranchHeadSha` to current head SHA;
+    - set condition `BootstrapReady=True` with reason `InitializedFromHead`;
+    - do not create default-branch commit `Branch` resources in this reconcile.
+  - otherwise:
+    - compute commit SHAs between `status.lastDefaultBranchHeadSha` and head;
+    - create one `Branch` per missing SHA (default branch ref);
+    - update `status.lastDefaultBranchHeadSha` to the last processed SHA.
 - Sync non-default branch heads:
   - fetch branch heads and open PRs;
   - prefer PR head SHA when PR exists for a ref;
   - ensure exactly one `Branch` resource per non-default ref;
   - delete stale non-default `Branch` resources not present in GitHub.
+1. If `terrakojo.io/bootstrap-reset=true` was consumed successfully, controller writes it back to `terrakojo.io/bootstrap-reset=done`.
 1. Return `RequeueAfter: 30m`.
 
 ## Default Branch Commit Sync Details
-- First sync (`lastDefaultBranchHeadSha` empty): only current head SHA is created.
+- First sync (`lastDefaultBranchHeadSha` empty): current head SHA is recorded as cutover cursor, and no default-branch commit Branch is created.
 - If cursor equals current head: no default-branch creation.
 - For historical catch-up: GitHub compare API is used via `CompareCommits`.
 - Compare failure fallback:
@@ -97,6 +104,7 @@ It guarantees:
 - GitHub auth/client creation failure: hard error.
 - Branch list/create/update/delete failures: hard error.
 - Status update failure (`lastDefaultBranchHeadSha`): hard error.
+- Bootstrap failure marks `status.conditions[type=BootstrapReady]=False` with reason `InitializationFailed`.
 - Compare behavior prevents silent commit skips except explicit history-rewrite fallback.
 
 ## Cleanup and Deletion Semantics
@@ -120,6 +128,7 @@ Important log events:
 ## Operational Notes
 - Poll fallback interval is intentionally long (`30m`) and webhook-triggered sync is expected to handle near-real-time updates.
 - Default branch processing is incremental for large backlogs.
+- Bootstrap reset: set `metadata.annotations["terrakojo.io/bootstrap-reset"]="true"` to reinitialize cutover from current default-branch head. Controller marks completion with `"done"`.
 - This controller does not react directly to `Branch` changes; it reacts to `Repository` events plus periodic polling.
 
 ## Test Coverage Map
@@ -140,4 +149,3 @@ Covered scenarios:
 Known coverage gaps:
 - no direct envtest assertion for repository deletion finalizer flow waiting for owned `Branch` removal.
 - limited direct assertions around incremental cursor advancement across multiple >250 commit batches.
-
