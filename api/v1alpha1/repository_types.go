@@ -89,6 +89,8 @@ type RepositoryStatus struct {
 	// - "Available": the resource is fully functional
 	// - "Progressing": the resource is being created or updated
 	// - "Degraded": the resource failed to reach or maintain its desired state
+	// Terrakojo-specific condition types include:
+	// - "BootstrapReady": default-branch cutover point is initialized from current HEAD
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
