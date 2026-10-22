@@ -1,5 +1,11 @@
 # Terrakojo Controller Overview
 
+## Build requirements
+
+Use Go 1.26.10 or newer to include the current standard-library security fixes.
+The container build and GitHub Actions use this version from `Dockerfile` and
+`go.mod`; `make lint` uses golangci-lint v2.9.0 for Go 1.26 compatibility.
+
 ## Custom Resources (v1alpha1)
 - **Repository**: spec `{owner,name,type,defaultBranch,githubSecretRef{name[,namespace]}}`; status `conditions`, `synced`, `lastDefaultBranchHeadSha` (default-branch sync cursor).
 - **Branch**: spec `{owner,repository,name,sha,prNumber?}`; status `conditions`, `workflows[]`, `changedFiles[]`.
