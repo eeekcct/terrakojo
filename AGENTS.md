@@ -3,7 +3,7 @@
 This repository is a Kubernetes controller (kubebuilder). Primary doc: docs/overview.md.
 
 ## Tech
-- Go 1.24.5 (module github.com/eeekcct/terrakojo)
+- Go 1.26.10 (module github.com/eeekcct/terrakojo)
 - controller-runtime, CRDs, webhook
 
 ## Key paths

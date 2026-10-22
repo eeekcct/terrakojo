@@ -469,7 +469,6 @@ func matchTemplate(match terrakojoiov1alpha1.WorkflowMatch, changedFiles []strin
 }
 
 func splitFolderLevel(files []string) []string {
-	folders := []string{}
 	folderSet := make(map[string]struct{})
 	for _, file := range files {
 		dir := path.Dir(file)
@@ -477,6 +476,7 @@ func splitFolderLevel(files []string) []string {
 			folderSet[dir] = struct{}{}
 		}
 	}
+	folders := make([]string, 0, len(folderSet))
 	for folder := range folderSet {
 		folders = append(folders, folder)
 	}
