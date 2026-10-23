@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	gh "github.com/eeekcct/terrakojo/internal/github"
@@ -106,22 +107,26 @@ func CollectDefaultBranchCommits(repo *terrakojoiov1alpha1.Repository, ghClient 
 	return shas, nil
 }
 
-func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface) ([]terrakojoiov1alpha1.BranchInfo, error) {
+func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface) (*BranchHeads, error) {
 	branches, err := ghClient.ListBranches(repo.Spec.Owner, repo.Spec.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list branches: %w", err)
 	}
 
-	branchHeads := map[string]string{}
+	heads := map[string]BranchHead{}
+	localSHAs := map[string]string{}
 	for _, branch := range branches {
-		if branch == nil || branch.Name == nil || branch.Commit == nil || branch.Commit.SHA == nil {
+		if branch == nil || branch.GetName() == "" || branch.GetCommit().GetSHA() == "" {
 			continue
 		}
-		ref := *branch.Name
+		ref := branch.GetName()
 		if ref == repo.Spec.DefaultBranch {
 			continue
 		}
-		branchHeads[ref] = *branch.Commit.SHA
+		localSHAs[ref] = branch.GetCommit().GetSHA()
+		heads[ref] = BranchHead{BranchInfo: terrakojoiov1alpha1.BranchInfo{
+			Ref: ref, SHA: branch.GetCommit().GetSHA(),
+		}}
 	}
 
 	prs, err := ghClient.ListOpenPullRequests(repo.Spec.Owner, repo.Spec.Name)
@@ -129,70 +134,67 @@ func FetchBranchHeadsFromGitHub(repo *terrakojoiov1alpha1.Repository, ghClient g
 		return nil, fmt.Errorf("failed to list pull requests: %w", err)
 	}
 
-	type prHead struct {
-		number int
-		sha    string
-	}
-	prByRef := map[string]prHead{}
+	snapshot := &BranchHeads{ExternalPRs: make(map[int]string)}
 	for _, pr := range prs {
-		if pr == nil || pr.Head == nil || pr.Head.Ref == nil || pr.Number == nil {
+		if pr == nil || pr.Head == nil || pr.Head.GetRef() == "" || pr.GetNumber() <= 0 {
 			continue
 		}
-		ref := *pr.Head.Ref
-		if existing, exists := prByRef[ref]; exists {
-			// Multiple PRs exist for the same ref; keep the one with the higher number
-			if *pr.Number <= existing.number {
+		head := BranchHead{
+			BranchInfo: terrakojoiov1alpha1.BranchInfo{
+				Ref: pr.Head.GetRef(), SHA: pr.Head.GetSHA(), PRNumber: pr.GetNumber(),
+			},
+			ExternalPR: !isSameRepositoryPR(repo, pr),
+		}
+		if head.ExternalPR {
+			snapshot.ExternalPRs[head.PRNumber] = head.Ref
+		}
+		key := head.Key()
+		if existing, exists := heads[key]; exists {
+			// Preserve highest-PR selection only for the same local ref.
+			if head.PRNumber <= existing.PRNumber {
 				continue
 			}
-			// Silently prefer higher PR number when multiple PRs exist for same ref
 		}
-		sha := ""
-		if pr.Head.SHA != nil {
-			sha = *pr.Head.SHA
+		if head.SHA == "" && !head.ExternalPR {
+			head.SHA = localSHAs[head.Ref]
 		}
-		prByRef[ref] = prHead{number: *pr.Number, sha: sha}
+		heads[key] = head
 	}
 
-	refSet := make(map[string]struct{}, len(branchHeads)+len(prByRef))
-	for ref := range branchHeads {
-		refSet[ref] = struct{}{}
+	keys := make([]string, 0, len(heads))
+	for key := range heads {
+		keys = append(keys, key)
 	}
-	for ref := range prByRef {
-		refSet[ref] = struct{}{}
-	}
-
-	newRefs := make([]string, 0, len(refSet))
-	for ref := range refSet {
-		newRefs = append(newRefs, ref)
-	}
-	sort.Strings(newRefs)
-	updated := make([]terrakojoiov1alpha1.BranchInfo, 0, len(newRefs))
-	for _, ref := range newRefs {
-		sha := branchHeads[ref]
-		prInfo, hasPR := prByRef[ref]
-		// Prefer PR head SHA when a PR exists for this ref.
-		// This ensures workflows run against the actual PR code,
-		// not a potentially stale branch SHA or a base repo branch.
-		// If PR SHA is unavailable, fall back to branch SHA.
-		if hasPR && prInfo.sha != "" {
-			sha = prInfo.sha
-		}
-		if sha == "" {
-			if hasPR {
-				syncLog.Info("Skipping branch ref with missing SHA from GitHub", "ref", ref, "prNumber", prInfo.number)
-			} else {
-				syncLog.Info("Skipping branch ref with missing SHA from GitHub", "ref", ref)
-			}
+	sort.Strings(keys)
+	snapshot.Heads = make([]BranchHead, 0, len(keys))
+	for _, key := range keys {
+		head := heads[key]
+		if head.SHA == "" {
+			syncLog.Info("Skipping branch ref with missing SHA from GitHub", "ref", head.Ref, "prNumber", head.PRNumber)
 			continue
 		}
-		entry := terrakojoiov1alpha1.BranchInfo{
-			Ref: ref,
-			SHA: sha,
-		}
-		if hasPR {
-			entry.PRNumber = prInfo.number
-		}
-		updated = append(updated, entry)
+		snapshot.Heads = append(snapshot.Heads, head)
 	}
-	return updated, nil
+	return snapshot, nil
+}
+
+// GitHub's PR-list endpoint is scoped to the configured base repository.
+// Repository IDs, when present on both sides, survive renames. Older or partial
+// responses may omit IDs; require explicit head repository names in that case.
+// A deleted/unknown head repository must never inherit a local branch identity.
+func isSameRepositoryPR(repo *terrakojoiov1alpha1.Repository, pr *ghapi.PullRequest) bool {
+	headRepo := pr.GetHead().GetRepo()
+	if headRepo == nil {
+		return false
+	}
+	baseRepo := pr.GetBase().GetRepo()
+	if headRepo.GetID() > 0 && baseRepo.GetID() > 0 {
+		return headRepo.GetID() == baseRepo.GetID()
+	}
+	expected := repo.Spec.Owner + "/" + repo.Spec.Name
+	if headRepo.GetFullName() != "" {
+		return strings.EqualFold(headRepo.GetFullName(), expected)
+	}
+	return strings.EqualFold(headRepo.GetOwner().GetLogin(), repo.Spec.Owner) &&
+		strings.EqualFold(headRepo.GetName(), repo.Spec.Name)
 }
