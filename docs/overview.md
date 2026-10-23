@@ -50,9 +50,12 @@ The container build and GitHub Actions use this version from `Dockerfile` and
 
 ## Webhook (`internal/webhook/webhook.go`)
 - Handles GitHub push/PR events and requests a Repository sync.
-- The separate webhook server requires a non-empty `GITHUB_WEBHOOK_SECRET` and
-  exits before opening a listener if it is unset or empty. The controller process
-  does not require this setting. Configure the same secret in GitHub.
+- Set the same non-empty `GITHUB_WEBHOOK_SECRET` in the webhook server and GitHub
+  to verify delivery signatures. An unset or empty secret preserves the existing
+  unsigned mode: HMAC verification is disabled on **every exposed interface**.
+  Use unsigned mode only for isolated, trusted local development, never for an
+  externally reachable receiver. The server listens on `:8080`, and the stock
+  Service is `NodePort`; neither is inherently local-only.
 - Request bodies are limited to 25 MiB (26,214,400 bytes) before signature
   verification and JSON decoding, including requests without `Content-Length`.
   This accommodates GitHub's [documented 25 MB payload cap](https://docs.github.com/en/webhooks/webhook-events-and-payloads#payload-cap).

@@ -49,10 +49,6 @@ func (b *webhookBody) Read(p []byte) (int, error) {
 
 // NewHandler creates a new platform-agnostic webhook handler
 func NewHandler(cfg *config.Config, kubeClient client.Client) (*Handler, error) {
-	if cfg.WebhookGithubSecret == "" {
-		return nil, errors.New("GITHUB_WEBHOOK_SECRET must not be empty")
-	}
-
 	// Initialize GitHub webhook
 	githubWebhook, err := github.New(github.Options.Secret(cfg.WebhookGithubSecret))
 	if err != nil {

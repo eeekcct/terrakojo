@@ -11,16 +11,11 @@ import (
 )
 
 func main() {
-	cfg := config.LoadConfig()
-	if cfg.WebhookGithubSecret == "" {
-		log.Fatal("GITHUB_WEBHOOK_SECRET must not be empty")
-	}
-
 	client, err := kubernetes.NewClient()
 	if err != nil {
 		log.Fatalf("Failed to create Kubernetes client: %v", err)
 	}
-	handler, err := webhook.NewHandler(cfg, client)
+	handler, err := webhook.NewHandler(config.LoadConfig(), client)
 	if err != nil {
 		log.Fatalf("Failed to create webhook handler: %v", err)
 	}

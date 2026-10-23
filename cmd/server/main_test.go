@@ -3,8 +3,6 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -34,22 +32,4 @@ func TestHTTPServerTimeoutsAndRouting(t *testing.T) {
 	server.Handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/other", nil))
 	require.Equal(t, http.StatusNotFound, rr.Code)
 	require.False(t, called)
-}
-
-func TestMainRejectsEmptySecretBeforeKubernetes(t *testing.T) {
-	if os.Getenv("TERRAKOJO_TEST_EMPTY_SECRET") == "1" {
-		main()
-		return
-	}
-
-	t.Setenv("TERRAKOJO_TEST_EMPTY_SECRET", "1")
-	t.Setenv("GITHUB_WEBHOOK_SECRET", "")
-	t.Setenv("KUBECONFIG", t.TempDir()+"/missing-kubeconfig")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestMainRejectsEmptySecretBeforeKubernetes$")
-	output, err := cmd.CombinedOutput()
-	var exitErr *exec.ExitError
-	require.ErrorAs(t, err, &exitErr)
-	require.Equal(t, 1, exitErr.ExitCode())
-	require.Contains(t, string(output), "GITHUB_WEBHOOK_SECRET must not be empty")
-	require.NotContains(t, string(output), "Kubernetes client")
 }
