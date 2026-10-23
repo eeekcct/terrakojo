@@ -2,6 +2,8 @@ package webhook
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -24,6 +26,26 @@ type Handler struct {
 }
 
 const syncRequestAnnotation = "terrakojo.io/sync-requested-at"
+
+// GitHub caps webhook payloads at 25 MB. Allow 25 MiB so neither decimal nor
+// binary interpretations of that documented cap reject a legitimate delivery.
+// https://docs.github.com/en/webhooks/webhook-events-and-payloads#payload-cap
+const maxWebhookBodyBytes int64 = 25 << 20
+
+// webhookBody preserves read errors that the webhook parser otherwise replaces
+// with ErrParsingPayload. Wrapping MaxBytesReader also bounds the parser's drain.
+type webhookBody struct {
+	io.ReadCloser
+	readErr error
+}
+
+func (b *webhookBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF && b.readErr == nil {
+		b.readErr = err
+	}
+	return n, err
+}
 
 // NewHandler creates a new platform-agnostic webhook handler
 func NewHandler(cfg *config.Config, kubeClient client.Client) (*Handler, error) {
@@ -62,8 +84,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleGitHubWebhook processes GitHub webhook events
 func (h *Handler) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
-	// Parse the webhook payload
+	if r.ContentLength > maxWebhookBodyBytes {
+		http.Error(w, "Webhook payload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Limit actual reads, not just Content-Length: chunked requests have no known
+	// length. Keep the original bytes intact for the parser's HMAC verification.
+	body := &webhookBody{ReadCloser: http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)}
+	r.Body = body
 	payload, err := h.githubWebhook.Parse(r, github.PushEvent, github.PullRequestEvent, github.PingEvent)
+	var sizeErr *http.MaxBytesError
+	if errors.As(body.readErr, &sizeErr) {
+		http.Error(w, "Webhook payload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if body.readErr != nil {
+		http.Error(w, "Failed to read webhook payload", http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		log.Printf("Error parsing GitHub webhook: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)

@@ -50,6 +50,23 @@ The container build and GitHub Actions use this version from `Dockerfile` and
 
 ## Webhook (`internal/webhook/webhook.go`)
 - Handles GitHub push/PR events and requests a Repository sync.
+- Set the same non-empty `GITHUB_WEBHOOK_SECRET` in the webhook server and GitHub
+  to verify delivery signatures. An unset or empty secret preserves the existing
+  unsigned mode: HMAC verification is disabled on **every exposed interface**.
+  Use unsigned mode only for isolated, trusted local development, never for an
+  externally reachable receiver. The server listens on `:8080`, and the stock
+  Service is `NodePort`; neither is inherently local-only.
+- Request bodies are limited to 25 MiB (26,214,400 bytes) before signature
+  verification and JSON decoding, including requests without `Content-Length`.
+  This accommodates GitHub's [documented 25 MB payload cap](https://docs.github.com/en/webhooks/webhook-events-and-payloads#payload-cap).
+  Larger bodies receive HTTP 413; other body-read failures receive HTTP 400.
+  Rejected requests do not request a Repository sync. HMAC verification uses the
+  unmodified request bytes.
+- HTTP timeouts are 5 seconds for headers, 10 seconds for the whole request read,
+  15 seconds for writes, and 60 seconds for idle keep-alive connections. These
+  bound slow uploads and stalled connections while allowing the supported payload
+  size; they do not impose a deadline on Kubernetes reconciliation. The body cap
+  is per request, not a global memory or concurrency limit.
 - Annotation update with optimistic retry:
   - Sets `terrakojo.io/sync-requested-at` on the matching Repository.
 - Uses labels `terrakojo.io/owner`, `terrakojo.io/repo-name` to find the Repository.
