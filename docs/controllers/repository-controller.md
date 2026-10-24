@@ -7,7 +7,8 @@ Source: `internal/controller/repository_controller.go`
 It guarantees:
 - required labels and finalizer exist on `Repository`;
 - default branch commits are represented as per-commit `Branch` resources;
-- non-default refs are represented as one latest-head `Branch` per ref;
+- local non-default refs are represented as one latest-head `Branch` per ref;
+- external PR heads are represented independently by PR number in the base repository;
 - stale non-default `Branch` resources are deleted;
 - owned `Branch` resources are cleaned up before repository deletion finalizes.
 
@@ -65,8 +66,9 @@ It guarantees:
     - update `status.lastDefaultBranchHeadSha` to the last processed SHA.
 - Sync non-default branch heads:
   - fetch branch heads and open PRs;
-  - prefer PR head SHA when PR exists for a ref;
-  - ensure exactly one `Branch` resource per non-default ref;
+  - prefer same-repository PR head SHA for a local ref;
+  - isolate external/unknown-origin PR heads by PR number;
+  - ensure one `Branch` per local ref or external PR;
   - delete stale non-default `Branch` resources not present in GitHub.
 1. If `terrakojo.io/bootstrap-reset=true` was consumed successfully, controller atomically writes `done` and removes `terrakojo.io/bootstrap-reset-id`. A later explicit `true` therefore receives a new identity, including at the same HEAD.
 1. Return `RequeueAfter: 30m`.
@@ -84,21 +86,53 @@ It guarantees:
 - next reconcile continues from that cursor.
 
 ## Non-Default Branch Sync Details
-- One desired entry per ref (`BranchInfo`), optionally with PR number.
-- Existing branch with same ref and same SHA:
-- only metadata update is performed when PR number changed.
-- Existing branch with same ref and different SHA:
-- old branch is deleted;
-- new branch is created with new SHA.
-- Resource naming for `Branch`:
-- `<repository-name>-<hash(ref)[:8]>-<short-sha[:8]>`.
-- ref hash is included so different refs pointing to same SHA do not collide.
+- Local refs retain one desired head per ref. When several same-repository PRs
+  use that ref, the highest PR number wins. Its SHA takes precedence over the
+  branch-list SHA, with the latter used only when the local PR SHA is missing.
+- Fork PRs and PRs with unknown/deleted head repositories use independent PR
+  identities, scoped to the base repository. Two PRs from the same fork/ref are
+  also independent. Their SHA must come from the PR head, never a local ref.
+- Head/base repository IDs identify same-repository PRs when both are available;
+  otherwise explicit head repository owner/name is compared case-insensitively
+  with the configured repository. A missing head repository is not assumed local.
+- A head with no SHA is skipped. Its known external PR identity is still retained
+  for legacy-resource migration, preventing accidental reuse as a local branch.
+- Same identity and SHA: retain the existing object. A changed SHA (or changed
+  literal ref on an external PR) replaces only that identity's Branch.
+- Local resource names are unchanged:
+  `<repository-name>-<hash(ref)[:8]>-<short-sha[:8]>`.
+- External PR resource names are:
+  `<repository-name>-pr-<pr-number>-<short-sha[:8]>`.
+  The controller-managed annotation `terrakojo.io/pull-request-identity` records
+  the PR number. Do not edit this identity annotation manually.
+- `spec.name` remains the literal Git ref; `spec.owner` and `spec.repository`
+  remain the base repository. Workflow matching, runtime ref/PR values, changed-file
+  queries, CheckRuns and credential selection retain those meanings. This does
+  not add a checkout implementation or change which repository receives credentials.
+- The existing default-ref exclusion remains: a PR whose head ref equals
+  `spec.defaultBranch`, including a fork's `main`, is not materialized as a
+  non-default Branch. Default commit processing is unchanged.
+
+### Upgrade behavior
+Existing unannotated Branches matching a currently open external PR number and
+head ref are deleted and recreated once with the new identity. Their dependent
+Workflows may be cancelled and recreated. The controller waits for existing
+finalizers to finish before reusing a name for a local branch. Normal local
+branches retain their existing names and objects.
+
+Closed or absent historical PRs cannot be classified from the open-PR snapshot;
+their unannotated objects retain the previous cleanup behavior. If upgrading a
+development installation that contains such ambiguous historical resources,
+reset those controller-managed Branches and their dependent Workflows before
+relying on the new identity scheme. No live, interruption-free migration or
+rollback compatibility is promised; do not downgrade with new external-identity
+resources still present.
 
 ## State and Idempotency
 - Label enforcement is idempotent.
 - Finalizer handling is idempotent.
 - Default branch creation is deduplicated by existing SHA.
-- Non-default refs converge to one latest branch object per ref.
+- Non-default heads converge to one latest object per local ref or external PR.
 - Re-running reconcile with unchanged GitHub state yields no net resource changes or redundant condition/status writes.
 - A successful atomic cursor/status write defines the cutover. If it fails, the cursor and applied reset ID remain unchanged; a retry may initialize from the then-current HEAD.
 - Once an ID is recorded in status, retries never reinitialize that reset. They continue normal commit processing from the persisted cursor, even after branch/PR sync or reset acknowledgment failure.
@@ -150,6 +184,11 @@ Covered scenarios:
 - finalizer and required labels are added.
 - default branch commit creates `Branch` resource.
 - non-default branch + PR metadata creates `Branch` with `prNumber`.
+- local and two fork PRs with identical ref/SHA remain independent (fake client and envtest).
+- advancing or closing one fork leaves the other fork/local objects unchanged.
+- missing fork SHA never borrows a local SHA; unknown head repositories are isolated.
+- legacy fork recreation waits for finalizers before reusing a local name.
+- fork heads named as the default branch remain excluded.
 - stale non-default `Branch` resources are pruned.
 - error paths:
   - missing GitHub manager;

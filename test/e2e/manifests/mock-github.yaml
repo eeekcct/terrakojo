@@ -60,7 +60,7 @@ data:
                 for ref, info in OPEN_PRS.items():
                     number = info.get("number")
                     sha = info.get("sha") or BRANCHES.get(ref)
-                    prs.append({"number": number, "state": "open", "head": {"ref": ref, "sha": sha}})
+                    prs.append({"number": number, "state": "open", "head": {"ref": ref, "sha": sha, "repo": {"full_name": "octo/demo"}}})
                 self._send(200, prs)
                 return
             if re.match(r"^/api/v3/repos/[^/]+/[^/]+/compare/.+\.\.\..+$", path):

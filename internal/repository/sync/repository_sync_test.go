@@ -326,7 +326,10 @@ func TestFetchBranchHeadsFromGitHub(t *testing.T) {
 			return []*ghapi.PullRequest{
 				{
 					Number: ghapi.Ptr(12),
-					Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr("feature/new"), SHA: ghapi.Ptr("sha-new")},
+					Head: &ghapi.PullRequestBranch{
+						Ref: ghapi.Ptr("feature/new"), SHA: ghapi.Ptr("sha-new"),
+						Repo: &ghapi.Repository{FullName: ghapi.Ptr(owner + "/" + repoName)},
+					},
 				},
 			}, nil
 		},
@@ -334,11 +337,13 @@ func TestFetchBranchHeadsFromGitHub(t *testing.T) {
 
 	updated, err := FetchBranchHeadsFromGitHub(repo, ghClient)
 	require.NoError(t, err)
-	require.Len(t, updated, 2)
+	require.Len(t, updated.Heads, 2)
+	require.Empty(t, updated.ExternalPRs)
 
 	byRef := map[string]terrakojoiov1alpha1.BranchInfo{}
-	for _, entry := range updated {
-		byRef[entry.Ref] = entry
+	for _, entry := range updated.Heads {
+		require.False(t, entry.ExternalPR)
+		byRef[entry.Ref] = entry.BranchInfo
 	}
 	require.Contains(t, byRef, "feature/old")
 	require.Contains(t, byRef, "feature/new")

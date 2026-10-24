@@ -20,7 +20,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -55,6 +57,10 @@ const (
 
 	repositoryConditionBootstrapReady = "BootstrapReady"
 )
+
+const externalPRIdentityAnnotation = "terrakojo.io/pull-request-identity"
+
+var errBranchMigrationPending = errors.New("waiting for legacy fork Branch cleanup")
 
 // repositorySyncInterval is the interval at which the controller polls GitHub for changes.
 // Webhooks should be the primary trigger for syncs, so this is kept long to minimize
@@ -156,13 +162,17 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Build a map for quick lookup
 	existingBranches := make(map[string][]terrakojoiov1alpha1.Branch)
 	for _, branch := range branchList.Items {
-		existingBranches[branch.Spec.Name] = append(existingBranches[branch.Spec.Name], branch)
+		key := branchIdentity(branch)
+		existingBranches[key] = append(existingBranches[key], branch)
 	}
 
 	bootstrapResetRequested := isBootstrapResetRequested(&repo)
 
 	// Sync branches directly from GitHub data.
 	if err := r.syncFromGitHub(ctx, &repo, ghClient, existingBranches); err != nil {
+		if errors.Is(err, errBranchMigrationPending) {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
 		log.Error(err, "Failed to sync branches from GitHub")
 		return ctrl.Result{}, err
 	}
@@ -427,10 +437,10 @@ func (r *RepositoryReconciler) ensureDefaultBranchCommits(ctx context.Context, r
 		if _, found := existingBySHA[sha]; found {
 			continue
 		}
-		branchInfo := terrakojoiov1alpha1.BranchInfo{
+		branchInfo := sync.BranchHead{BranchInfo: terrakojoiov1alpha1.BranchInfo{
 			Ref: repo.Spec.DefaultBranch,
 			SHA: sha,
-		}
+		}}
 		if err := r.createBranchResource(ctx, repo, branchInfo); err != nil {
 			return fmt.Errorf("failed to create branch for default branch commit %s: %w", sha, err)
 		}
@@ -440,19 +450,52 @@ func (r *RepositoryReconciler) ensureDefaultBranchCommits(ctx context.Context, r
 	return nil
 }
 
-func (r *RepositoryReconciler) syncBranchHeads(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch, desired []terrakojoiov1alpha1.BranchInfo) error {
+func (r *RepositoryReconciler) syncBranchHeads(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branches map[string][]terrakojoiov1alpha1.Branch, snapshot *sync.BranchHeads) error {
 	log := logf.FromContext(ctx)
 	defaultRef := repo.Spec.DefaultBranch
 
-	for _, branchInfo := range desired {
+	// Legacy fork objects used local ref names. Retire them before creating any
+	// local head that might need the same Kubernetes name; finalizers must finish
+	// before that name can be reused. This is a one-time upgrade recreation.
+	pending := false
+	for key, existing := range branches {
+		kept := existing[:0]
+		for _, branch := range existing {
+			ref, external := snapshot.ExternalPRs[branch.Spec.PRNumber]
+			if branch.Annotations[externalPRIdentityAnnotation] != "" || !external ||
+				ref != branch.Spec.Name || ref == defaultRef {
+				kept = append(kept, branch)
+				continue
+			}
+			if branch.DeletionTimestamp.IsZero() {
+				if err := r.Delete(ctx, &branch); client.IgnoreNotFound(err) != nil {
+					return err
+				}
+			}
+			var remaining terrakojoiov1alpha1.Branch
+			err := r.Get(ctx, client.ObjectKeyFromObject(&branch), &remaining)
+			if err == nil {
+				pending = true
+			} else if client.IgnoreNotFound(err) != nil {
+				return err
+			}
+		}
+		branches[key] = kept
+	}
+	if pending {
+		return errBranchMigrationPending
+	}
+
+	for _, branchInfo := range snapshot.Heads {
 		if branchInfo.Ref == defaultRef {
 			continue
 		}
-		existingForRef := branches[branchInfo.Ref]
+		key := branchInfo.Key()
+		existingForRef := branches[key]
 		if err := r.ensureBranchResource(ctx, repo, branchInfo, existingForRef); err != nil {
 			return err
 		}
-		delete(branches, branchInfo.Ref)
+		delete(branches, key)
 	}
 
 	// Remove default branch from consideration to avoid deleting commit branches.
@@ -471,13 +514,13 @@ func (r *RepositoryReconciler) syncBranchHeads(ctx context.Context, repo *terrak
 }
 
 // ensureBranchResource creates or updates a Branch resource as needed
-func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchInfo terrakojoiov1alpha1.BranchInfo, existing []terrakojoiov1alpha1.Branch) error {
+func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branchInfo sync.BranchHead, existing []terrakojoiov1alpha1.Branch) error {
 	log := logf.FromContext(ctx)
 
-	// GitHub sync ensures only the latest SHA per ref, so existing should have at most one entry.
+	// GitHub sync ensures one latest head per identity.
 	if len(existing) > 0 {
 		current := &existing[0]
-		if current.Spec.SHA == branchInfo.SHA {
+		if current.Spec.SHA == branchInfo.SHA && current.Spec.Name == branchInfo.Ref {
 			// Branch already exists with correct SHA, check if metadata needs update
 			if r.needsBranchUpdate(current, branchInfo) {
 				if err := r.updateBranchResource(ctx, current, branchInfo); err != nil {
@@ -509,16 +552,24 @@ func (r *RepositoryReconciler) ensureBranchResource(ctx context.Context, repo *t
 }
 
 // createBranchResource creates a new Branch resource
-func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branch terrakojoiov1alpha1.BranchInfo) error {
+func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *terrakojoiov1alpha1.Repository, branch sync.BranchHead) error {
 	short := shortSHA(branch.SHA)
 	// Hash the ref to avoid collisions when different refs point to the same SHA
 	// and to keep names short (branch name will have workflow/job suffixes appended)
 	refHash := hashRef(branch.Ref)
 	branchName := fmt.Sprintf("%s-%s-%s", repo.Spec.Name, refHash, short)
+	var annotations map[string]string
+	if branch.ExternalPR {
+		// Explicit PR number, rather than a truncated ref hash, isolates even
+		// identical refs and SHAs and cannot collide with the local naming form.
+		branchName = fmt.Sprintf("%s-pr-%d-%s", repo.Spec.Name, branch.PRNumber, short)
+		annotations = map[string]string{externalPRIdentityAnnotation: strconv.Itoa(branch.PRNumber)}
+	}
 	newBranch := &terrakojoiov1alpha1.Branch{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      branchName,
-			Namespace: repo.Namespace,
+			Name:        branchName,
+			Namespace:   repo.Namespace,
+			Annotations: annotations,
 			Labels: map[string]string{
 				"terrakojo.io/repo-uid":  string(repo.UID),
 				"terrakojo.io/repo-name": repo.Spec.Name,
@@ -542,12 +593,12 @@ func (r *RepositoryReconciler) createBranchResource(ctx context.Context, repo *t
 }
 
 // needsBranchUpdate checks if a Branch resource needs to be updated
-func (r *RepositoryReconciler) needsBranchUpdate(branch *terrakojoiov1alpha1.Branch, branchInfo terrakojoiov1alpha1.BranchInfo) bool {
+func (r *RepositoryReconciler) needsBranchUpdate(branch *terrakojoiov1alpha1.Branch, branchInfo sync.BranchHead) bool {
 	return branch.Spec.PRNumber != branchInfo.PRNumber
 }
 
 // updateBranchResource updates an existing Branch resource
-func (r *RepositoryReconciler) updateBranchResource(ctx context.Context, barnch *terrakojoiov1alpha1.Branch, branchInfo terrakojoiov1alpha1.BranchInfo) error {
+func (r *RepositoryReconciler) updateBranchResource(ctx context.Context, barnch *terrakojoiov1alpha1.Branch, branchInfo sync.BranchHead) error {
 	barnch.Spec.PRNumber = branchInfo.PRNumber
 	return r.Update(ctx, barnch)
 }
@@ -594,6 +645,13 @@ func (r *RepositoryReconciler) deleteBranchesForRepository(ctx context.Context, 
 	}
 
 	return nil
+}
+
+func branchIdentity(branch terrakojoiov1alpha1.Branch) string {
+	if number := branch.Annotations[externalPRIdentityAnnotation]; number != "" {
+		return "pr:" + number
+	}
+	return branch.Spec.Name
 }
 
 func shortSHA(sha string) string {

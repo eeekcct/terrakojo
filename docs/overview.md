@@ -19,7 +19,8 @@ The container build and GitHub Actions use this version from `Dockerfile` and
 - **RepositoryReconciler** (`internal/controller/repository_controller.go`)
   - Ensures labels (`terrakojo.io/owner`, `terrakojo.io/repo-name`, `terrakojo.io/repo-uid`, managed-by) and finalizer `terrakojo.io/cleanup-branches`.
   - Creates/updates **Branch** CRs from GitHub directly:
-    - Non-default: keeps the latest head per ref (with PR number if open), deletes Branches for refs no longer in GitHub.
+    - Non-default: keeps the latest head per local ref; fork/unknown-origin PRs are isolated by PR number in the base repository. Advancing or closing one fork does not replace another fork or a same-named local branch. Raw ref names and base-repository credentials are unchanged.
+    - Existing external PR Branches are recreated once on upgrade, potentially cancelling/recreating their Workflows. See [upgrade behavior](controllers/repository-controller.md#upgrade-behavior), including historical-resource and rollback limits. PR head refs equal to the default branch remain excluded.
     - Default: on bootstrap (`status.lastDefaultBranchHeadSha` empty or a new reset identity is pending), stores current HEAD as cutover cursor and does not create historical commit Branches; after bootstrap, compares cursor to head and creates Branch per commit SHA.
   - Updates `status.lastDefaultBranchHeadSha` after successful default-branch sync.
   - Sets `status.conditions[type=BootstrapReady]` for cutover initialization state only; downstream sync failures do not mark an initialized cutoff as failed.
@@ -87,7 +88,7 @@ The container build and GitHub Actions use this version from `Dockerfile` and
 4. WorkflowReconciler runs Job & CheckRun; BranchReconciler deletes default-branch commit Branches after all Workflows finish.
 
 ## Notes / Pitfalls
-- Default branch commits are represented by per-commit Branch CRs; non-default branches keep one Branch CR per ref.
+- Default branch commits are represented by per-commit Branch CRs; non-default local branches keep one Branch CR per ref, while external/unknown-origin PRs keep one per PR number.
 - Repository controller prunes non-default Branch CRs that disappear from GitHub; Branch controller deletes default-branch commit Branches after workflows finish.
 - Conflict handling: Repository annotation updates use `RetryOnConflict` in webhook.
 - Repository status no longer stores branch lists or commit queues; Branch CRs are the source of truth.

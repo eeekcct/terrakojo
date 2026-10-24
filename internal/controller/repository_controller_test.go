@@ -43,6 +43,7 @@ import (
 
 	terrakojoiov1alpha1 "github.com/eeekcct/terrakojo/api/v1alpha1"
 	gh "github.com/eeekcct/terrakojo/internal/github"
+	"github.com/eeekcct/terrakojo/internal/repository/sync"
 	ghapi "github.com/google/go-github/v79/github"
 )
 
@@ -208,7 +209,7 @@ var _ = Describe("Repository Reconciler", func() {
 						return []*ghapi.PullRequest{
 							{
 								Number: ghapi.Ptr(12),
-								Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref), SHA: ghapi.Ptr(sha)},
+								Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref), SHA: ghapi.Ptr(sha), Repo: &ghapi.Repository{FullName: ghapi.Ptr(owner + "/" + repoName)}},
 							},
 						}, nil
 					},
@@ -483,7 +484,7 @@ var _ = Describe("Repository Reconciler error paths (fake client)", func() {
 							return []*ghapi.PullRequest{
 								{
 									Number: ghapi.Ptr(99), // New PR number: 99 (different from existing)
-									Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref), SHA: ghapi.Ptr(sha)},
+									Head:   &ghapi.PullRequestBranch{Ref: ghapi.Ptr(ref), SHA: ghapi.Ptr(sha), Repo: &ghapi.Repository{FullName: ghapi.Ptr(owner + "/" + repoName)}},
 								},
 							}, nil
 						},
@@ -690,11 +691,11 @@ func TestEnsureBranchResourceScenarios(t *testing.T) {
 				Scheme: testScheme,
 			}
 
-			err := reconciler.ensureBranchResource(ctx, repo, terrakojoiov1alpha1.BranchInfo{
+			err := reconciler.ensureBranchResource(ctx, repo, sync.BranchHead{BranchInfo: terrakojoiov1alpha1.BranchInfo{
 				Ref:      tt.ref,
 				SHA:      tt.newSHA,
 				PRNumber: tt.newPR,
-			}, []terrakojoiov1alpha1.Branch{*branch})
+			}}, []terrakojoiov1alpha1.Branch{*branch})
 			require.NoError(t, err)
 
 			if tt.expectOldGone {
