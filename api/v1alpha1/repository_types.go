@@ -102,6 +102,12 @@ type RepositoryStatus struct {
 	// +optional
 	LastDefaultBranchHeadSHA string `json:"lastDefaultBranchHeadSha,omitempty"`
 
+	// LastBootstrapResetID identifies the reset request whose cutover was persisted.
+	// It is recorded atomically with LastDefaultBranchHeadSHA to make retries safe.
+	// This controller-managed value is retained after the reset is acknowledged.
+	// +optional
+	LastBootstrapResetID string `json:"lastBootstrapResetID,omitempty"`
+
 	// Synced indicates whether the repository has been successfully synced
 	// +optional
 	Synced bool `json:"synced,omitempty"`

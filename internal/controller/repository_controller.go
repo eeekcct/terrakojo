@@ -23,8 +23,10 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -46,9 +48,10 @@ type RepositoryReconciler struct {
 const (
 	repositoryFinalizer = "terrakojo.io/cleanup-branches"
 
-	repositoryBootstrapResetAnnotation = "terrakojo.io/bootstrap-reset"
-	repositoryBootstrapResetRequested  = "true"
-	repositoryBootstrapResetDone       = "done"
+	repositoryBootstrapResetAnnotation   = "terrakojo.io/bootstrap-reset"
+	repositoryBootstrapResetRequested    = "true"
+	repositoryBootstrapResetDone         = "done"
+	repositoryBootstrapResetIDAnnotation = "terrakojo.io/bootstrap-reset-id"
 
 	repositoryConditionBootstrapReady = "BootstrapReady"
 )
@@ -156,17 +159,11 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		existingBranches[branch.Spec.Name] = append(existingBranches[branch.Spec.Name], branch)
 	}
 
-	bootstrapRequested := shouldBootstrapFromHead(&repo)
 	bootstrapResetRequested := isBootstrapResetRequested(&repo)
 
 	// Sync branches directly from GitHub data.
 	if err := r.syncFromGitHub(ctx, &repo, ghClient, existingBranches); err != nil {
 		log.Error(err, "Failed to sync branches from GitHub")
-		if bootstrapRequested {
-			if conditionErr := r.markBootstrapFailure(ctx, &repo, err); conditionErr != nil {
-				log.Error(conditionErr, "Failed to update Repository BootstrapReady condition")
-			}
-		}
 		return ctrl.Result{}, err
 	}
 
@@ -181,17 +178,23 @@ func (r *RepositoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 func (r *RepositoryReconciler) syncFromGitHub(ctx context.Context, repo *terrakojoiov1alpha1.Repository, ghClient gh.ClientInterface, existingBranches map[string][]terrakojoiov1alpha1.Branch) error {
+	if err := r.ensureBootstrapResetID(ctx, repo); err != nil {
+		return err
+	}
 	defaultRef := repo.Spec.DefaultBranch
 	bootstrapRequested := shouldBootstrapFromHead(repo)
 	defaultHeadSHA, err := sync.FetchDefaultBranchHeadSHA(repo, ghClient)
 	if err != nil {
+		if bootstrapRequested {
+			return r.bootstrapFailure(ctx, repo, err)
+		}
 		return err
 	}
 
 	if defaultHeadSHA != "" {
 		if bootstrapRequested {
 			if err := r.bootstrapDefaultBranchFromCurrentHead(ctx, repo, defaultHeadSHA); err != nil {
-				return err
+				return r.bootstrapFailure(ctx, repo, err)
 			}
 		} else {
 			commitSHAs, err := sync.CollectDefaultBranchCommits(repo, ghClient, defaultHeadSHA)
@@ -217,7 +220,7 @@ func (r *RepositoryReconciler) syncFromGitHub(ctx context.Context, repo *terrako
 			}
 		}
 	} else if bootstrapRequested {
-		return fmt.Errorf("failed to initialize cutover point: default branch %q has empty HEAD SHA", defaultRef)
+		return r.bootstrapFailure(ctx, repo, fmt.Errorf("failed to initialize cutover point: default branch %q has empty HEAD SHA", defaultRef))
 	}
 
 	branchHeads, err := sync.FetchBranchHeadsFromGitHub(repo, ghClient)
@@ -284,47 +287,106 @@ func (r *RepositoryReconciler) ensureLabels(ctx context.Context, repo *terrakojo
 
 func shouldBootstrapFromHead(repo *terrakojoiov1alpha1.Repository) bool {
 	if isBootstrapResetRequested(repo) {
-		return true
+		requestID := repo.Annotations[repositoryBootstrapResetIDAnnotation]
+		return requestID == "" || repo.Status.LastBootstrapResetID != requestID
 	}
 	return repo.Status.LastDefaultBranchHeadSHA == ""
 }
 
 func isBootstrapResetRequested(repo *terrakojoiov1alpha1.Repository) bool {
-	if repo.Annotations == nil {
-		return false
-	}
 	return repo.Annotations[repositoryBootstrapResetAnnotation] == repositoryBootstrapResetRequested
 }
 
-func (r *RepositoryReconciler) markBootstrapResetDone(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
-	if repo.Annotations == nil {
-		repo.Annotations = map[string]string{}
+// Persist the request identity before initializing its cursor. The status write
+// records this ID atomically with the cutover, making retries safe after restart.
+func (r *RepositoryReconciler) ensureBootstrapResetID(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
+	requestID := repo.Annotations[repositoryBootstrapResetIDAnnotation]
+	requested := isBootstrapResetRequested(repo)
+	if (requested && requestID != "") || (!requested && requestID == "") {
+		return nil
 	}
-	repo.Annotations[repositoryBootstrapResetAnnotation] = repositoryBootstrapResetDone
-	return r.Update(ctx, repo)
+	updated := repo.DeepCopy()
+	if requested {
+		if updated.Annotations == nil {
+			updated.Annotations = map[string]string{}
+		}
+		updated.Annotations[repositoryBootstrapResetIDAnnotation] = string(uuid.NewUUID())
+	} else {
+		// An observed cancellation must not leave an ID for a later request.
+		delete(updated.Annotations, repositoryBootstrapResetIDAnnotation)
+	}
+	if err := r.Update(ctx, updated); err != nil {
+		return err
+	}
+	*repo = *updated
+	return nil
+}
+
+func (r *RepositoryReconciler) markBootstrapResetDone(ctx context.Context, repo *terrakojoiov1alpha1.Repository) error {
+	updated := repo.DeepCopy()
+	updated.Annotations[repositoryBootstrapResetAnnotation] = repositoryBootstrapResetDone
+	// Acknowledge and retire the request together. A later true gets a new ID,
+	// even when HEAD has not changed. Never retry this write on a fresh object:
+	// a conflict may mean the operator cancelled or replaced the request.
+	delete(updated.Annotations, repositoryBootstrapResetIDAnnotation)
+	if err := r.Update(ctx, updated); err != nil {
+		return err
+	}
+	*repo = *updated
+	return nil
 }
 
 func (r *RepositoryReconciler) bootstrapDefaultBranchFromCurrentHead(ctx context.Context, repo *terrakojoiov1alpha1.Repository, defaultHeadSHA string) error {
-	repo.Status.LastDefaultBranchHeadSHA = defaultHeadSHA
-	r.setRepositoryCondition(
-		repo,
+	updated := repo.DeepCopy()
+	updated.Status.LastDefaultBranchHeadSHA = defaultHeadSHA
+	if isBootstrapResetRequested(updated) {
+		updated.Status.LastBootstrapResetID = updated.Annotations[repositoryBootstrapResetIDAnnotation]
+	}
+	conditionChanged := r.setRepositoryCondition(
+		updated,
 		repositoryConditionBootstrapReady,
 		metav1.ConditionTrue,
 		"InitializedFromHead",
 		"Initialized cutover point from current default branch HEAD",
 	)
-	return r.Status().Update(ctx, repo)
+	if !conditionChanged && updated.Status.LastDefaultBranchHeadSHA == repo.Status.LastDefaultBranchHeadSHA &&
+		updated.Status.LastBootstrapResetID == repo.Status.LastBootstrapResetID {
+		return nil
+	}
+	// Do not mutate the caller until persistence succeeds: a later failure
+	// condition write must not accidentally commit a rejected cursor/reset ID.
+	if err := r.Status().Update(ctx, updated); err != nil {
+		return err
+	}
+	*repo = *updated
+	return nil
+}
+
+// Only failures to initialize the cutover affect BootstrapReady. Branch/PR sync
+// and reset acknowledgment errors must not invalidate an already persisted cursor.
+func (r *RepositoryReconciler) bootstrapFailure(ctx context.Context, repo *terrakojoiov1alpha1.Repository, cause error) error {
+	if err := r.markBootstrapFailure(ctx, repo, cause); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to update Repository BootstrapReady condition")
+	}
+	return cause
 }
 
 func (r *RepositoryReconciler) markBootstrapFailure(ctx context.Context, repo *terrakojoiov1alpha1.Repository, cause error) error {
-	r.setRepositoryCondition(
-		repo,
+	updated := repo.DeepCopy()
+	if !r.setRepositoryCondition(
+		updated,
 		repositoryConditionBootstrapReady,
 		metav1.ConditionFalse,
 		"InitializationFailed",
 		fmt.Sprintf("Failed to initialize cutover point from current default branch HEAD: %v", cause),
-	)
-	return r.Status().Update(ctx, repo)
+	) {
+		return nil
+	}
+	if err := r.Status().Update(ctx, updated); err != nil {
+		return err
+	}
+	*repo = *updated
+	return nil
 }
 
 func (r *RepositoryReconciler) setRepositoryCondition(
@@ -333,28 +395,13 @@ func (r *RepositoryReconciler) setRepositoryCondition(
 	status metav1.ConditionStatus,
 	reason,
 	message string,
-) {
-	if repo.Status.Conditions == nil {
-		repo.Status.Conditions = []metav1.Condition{}
-	}
-
-	now := metav1.NewTime(time.Now())
-	for i, condition := range repo.Status.Conditions {
-		if condition.Type == conditionType {
-			repo.Status.Conditions[i].Status = status
-			repo.Status.Conditions[i].Reason = reason
-			repo.Status.Conditions[i].Message = message
-			repo.Status.Conditions[i].LastTransitionTime = now
-			return
-		}
-	}
-
-	repo.Status.Conditions = append(repo.Status.Conditions, metav1.Condition{
+) bool {
+	return meta.SetStatusCondition(&repo.Status.Conditions, metav1.Condition{
 		Type:               conditionType,
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
-		LastTransitionTime: now,
+		ObservedGeneration: repo.Generation,
 	})
 }
 

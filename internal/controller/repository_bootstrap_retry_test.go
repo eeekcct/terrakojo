@@ -129,6 +129,8 @@ func TestReconcileBootstrapRetry(t *testing.T) {
 			require.Equal(t, cutoffSHA, persisted.Status.LastDefaultBranchHeadSHA,
 				"the failure must occur after the cutover has been durably recorded")
 			require.Empty(t, defaultBranchSHAs(t, baseClient, repo), "bootstrap must not replay historical commits")
+			require.True(t, meta.IsStatusConditionTrue(persisted.Status.Conditions, repositoryConditionBootstrapReady),
+				"downstream failures must not invalidate the persisted cutover")
 			if tt.failureAt == "done" {
 				require.Equal(t, 1, doneClient.failures)
 				require.Equal(t, repositoryBootstrapResetRequested, persisted.Annotations[repositoryBootstrapResetAnnotation],
