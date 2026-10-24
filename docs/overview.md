@@ -7,7 +7,7 @@ The container build and GitHub Actions use this version from `Dockerfile` and
 `go.mod`; `make lint` uses golangci-lint v2.9.0 for Go 1.26 compatibility.
 
 ## Custom Resources (v1alpha1)
-- **Repository**: spec `{owner,name,type,defaultBranch,githubSecretRef{name[,namespace]}}`; status `conditions`, `synced`, `lastDefaultBranchHeadSha` (default-branch sync cursor).
+- **Repository**: spec `{owner,name,type,defaultBranch,githubSecretRef{name[,namespace]}}`; status `conditions`, `synced`, `lastDefaultBranchHeadSha` (default-branch sync cursor), `lastBootstrapResetID` (controller-managed applied reset identity).
 - **Branch**: spec `{owner,repository,name,sha,prNumber?}`; status `conditions`, `workflows[]`, `changedFiles[]`.
 - **Workflow**: spec `{owner,repository,branch,sha,template,path?,parameters?}`; status `conditions`, `phase`, `jobs[]` (legacy/compatibility field; not actively maintained), `checkRunID`, `checkRunName`.
   - Controller-managed parameter keys:
@@ -20,8 +20,10 @@ The container build and GitHub Actions use this version from `Dockerfile` and
   - Ensures labels (`terrakojo.io/owner`, `terrakojo.io/repo-name`, `terrakojo.io/repo-uid`, managed-by) and finalizer `terrakojo.io/cleanup-branches`.
   - Creates/updates **Branch** CRs from GitHub directly:
     - Non-default: keeps the latest head per ref (with PR number if open), deletes Branches for refs no longer in GitHub.
-    - Default: compares `status.lastDefaultBranchHeadSha` to head and creates Branch per commit SHA.
+    - Default: on bootstrap (`status.lastDefaultBranchHeadSha` empty or a new reset identity is pending), stores current HEAD as cutover cursor and does not create historical commit Branches; after bootstrap, compares cursor to head and creates Branch per commit SHA.
   - Updates `status.lastDefaultBranchHeadSha` after successful default-branch sync.
+  - Sets `status.conditions[type=BootstrapReady]` for cutover initialization state only; downstream sync failures do not mark an initialized cutoff as failed.
+  - Persists reset identity atomically with the cutoff; retries after partial failure preserve the current cursor instead of recapturing HEAD.
   - On Repository deletion: deletes owned Branches, waits for completion, then removes finalizer.
 
 - **BranchReconciler** (`internal/controller/branch_controller.go`)
@@ -70,6 +72,9 @@ The container build and GitHub Actions use this version from `Dockerfile` and
 - Annotation update with optimistic retry:
   - Sets `terrakojo.io/sync-requested-at` on the matching Repository.
 - Uses labels `terrakojo.io/owner`, `terrakojo.io/repo-name` to find the Repository.
+- Controller-owned `terrakojo.io/bootstrap-reset-id` identifies an in-progress reset; it is removed atomically when writing `done`. Do not put this ID or `status.lastBootstrapResetID` in user-authored manifests.
+- Optional operator annotation:
+  - `terrakojo.io/bootstrap-reset=true` requests re-bootstrap of default-branch cutover from current HEAD (controller writes back `done` on success).
 
 ## GitHub Auth Helpers (`internal/kubernetes`)
 - Secrets: PAT (`token`) or GitHub App (`github-app-id`, `github-installation-id`, `github-private-key`).
