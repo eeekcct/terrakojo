@@ -17,7 +17,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-const forkTestSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const (
+	forkTestSHA       = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	forkTestLegacyUID = "legacy-fork-uid"
+)
 
 type forkFixture struct {
 	ctx        context.Context
@@ -32,9 +35,14 @@ func newForkFixture(t *testing.T) *forkFixture {
 	t.Helper()
 	f := &forkFixture{ctx: context.Background(), repo: newTestRepository("forks", types.UID("forks-uid"))}
 	prepareRepoForReconcile(f.repo)
+	// Fork-only scenarios begin after the default-branch cutover is initialized.
+	f.repo.Status.LastDefaultBranchHeadSHA = forkTestSHA
 	scheme := newTestScheme(t)
-	f.kube = newFakeClientWithIndex(scheme, f.repo)
+	f.kube = newFakeClientWithIndexAndRepositoryStatus(scheme, f.repo)
 	github := &fakeGitHubClient{
+		GetBranchFunc: func(_, _, ref string) (*ghapi.Branch, error) {
+			return &ghapi.Branch{Name: ghapi.Ptr(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(forkTestSHA)}}, nil
+		},
 		ListBranchesFunc:         func(_, _ string) ([]*ghapi.Branch, error) { return f.localHeads, nil },
 		ListOpenPullRequestsFunc: func(_, _ string) ([]*ghapi.PullRequest, error) { return f.prs, nil },
 	}
@@ -139,7 +147,7 @@ func TestRepositoryForkMigrationWaitsForFinalizers(t *testing.T) {
 	f.localHeads = []*ghapi.Branch{{Name: ghapi.Ptr(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(forkTestSHA)}}}
 	f.prs = []*ghapi.PullRequest{controllerForkPR(10, ref, forkTestSHA, "alice")}
 	legacy := newTestBranch(f.repo, ref, forkTestSHA, 10)
-	legacy.UID = "legacy-fork-uid"
+	legacy.UID = forkTestLegacyUID
 	legacy.Finalizers = []string{branchFinalizer}
 	f.addBranch(t, legacy)
 	require.Equal(t, time.Second, f.reconcile(t).RequeueAfter)
@@ -168,7 +176,7 @@ func TestRepositoryMissingForkSHADoesNotAdoptLegacyAsLocal(t *testing.T) {
 	f.localHeads = []*ghapi.Branch{{Name: ghapi.Ptr("feature"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(forkTestSHA)}}}
 	f.prs = []*ghapi.PullRequest{controllerForkPR(10, "feature", "", "alice")}
 	legacy := newTestBranch(f.repo, "feature", forkTestSHA, 10)
-	legacy.UID = "legacy-fork-uid"
+	legacy.UID = forkTestLegacyUID
 	f.addBranch(t, legacy)
 	f.reconcile(t)
 	branches := f.branches(t)
@@ -216,4 +224,84 @@ func TestRepositoryLocalPRClosurePreservesBranch(t *testing.T) {
 	require.Equal(t, local.UID, branches[0].UID)
 	require.Equal(t, local.Name, branches[0].Name)
 	require.Empty(t, branches[0].Annotations[externalPRIdentityAnnotation])
+}
+
+func TestRepositoryBootstrapResetSurvivesForkMigrationWait(t *testing.T) {
+	f := newForkFixture(t)
+	f.repo.Annotations = map[string]string{repositoryBootstrapResetAnnotation: repositoryBootstrapResetRequested}
+	require.NoError(t, f.kube.Update(f.ctx, f.repo))
+	legacy := newTestBranch(f.repo, "feature", forkTestSHA, 10)
+	legacy.UID = forkTestLegacyUID
+	legacy.Finalizers = []string{branchFinalizer}
+	f.addBranch(t, legacy)
+
+	headSHA := forkTestSHA
+	nextSHA := strings.Repeat("b", 40)
+	compareCalls := 0
+	github := &fakeGitHubClient{
+		GetBranchFunc: func(_, _, ref string) (*ghapi.Branch, error) {
+			return &ghapi.Branch{Name: ghapi.Ptr(ref), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(headSHA)}}, nil
+		},
+		ListBranchesFunc: func(_, _ string) ([]*ghapi.Branch, error) {
+			return []*ghapi.Branch{{Name: ghapi.Ptr("feature"), Commit: &ghapi.RepositoryCommit{SHA: ghapi.Ptr(forkTestSHA)}}}, nil
+		},
+		ListOpenPullRequestsFunc: func(_, _ string) ([]*ghapi.PullRequest, error) {
+			return []*ghapi.PullRequest{controllerForkPR(10, "feature", forkTestSHA, "alice")}, nil
+		},
+		CompareCommitsFunc: func(_, _, base, head string) (*gh.CompareResult, error) {
+			compareCalls++
+			require.Equal(t, forkTestSHA, base)
+			require.Equal(t, nextSHA, head)
+			return &gh.CompareResult{Commits: []*ghapi.RepositoryCommit{{SHA: ghapi.Ptr(nextSHA)}}}, nil
+		},
+	}
+	f.reconciler.GitHubClientManager = &fakeGitHubClientManager{
+		GetClientForRepositoryFunc: func(_ context.Context, _ *terrakojoiov1alpha1.Repository) (gh.ClientInterface, error) {
+			return github, nil
+		},
+	}
+	readRepo := func() *terrakojoiov1alpha1.Repository {
+		result := &terrakojoiov1alpha1.Repository{}
+		require.NoError(t, f.kube.Get(f.ctx, client.ObjectKeyFromObject(f.repo), result))
+		return result
+	}
+	require.Equal(t, time.Second, f.reconcile(t).RequeueAfter)
+	initialized := readRepo()
+	resetID := initialized.Annotations[repositoryBootstrapResetIDAnnotation]
+	require.NotEmpty(t, resetID)
+	require.Equal(t, resetID, initialized.Status.LastBootstrapResetID)
+	require.Equal(t, forkTestSHA, initialized.Status.LastDefaultBranchHeadSHA)
+	require.Equal(t, repositoryBootstrapResetRequested, initialized.Annotations[repositoryBootstrapResetAnnotation])
+
+	// HEAD can advance while the legacy fork's finalizer is still pending.
+	// The same reset must process the new commit, not recapture HEAD as cutover.
+	headSHA = nextSHA
+	require.Equal(t, time.Second, f.reconcile(t).RequeueAfter)
+	advanced := readRepo()
+	require.Equal(t, 1, compareCalls)
+	require.Equal(t, resetID, advanced.Status.LastBootstrapResetID)
+	require.Equal(t, resetID, advanced.Annotations[repositoryBootstrapResetIDAnnotation])
+	require.Equal(t, nextSHA, advanced.Status.LastDefaultBranchHeadSHA)
+	require.Equal(t, initialized.Status.Conditions, advanced.Status.Conditions)
+	processedCommit := newTestBranch(f.repo, f.repo.Spec.DefaultBranch, nextSHA, 0)
+	require.NoError(t, f.kube.Get(f.ctx, client.ObjectKeyFromObject(processedCommit), processedCommit))
+	require.NoError(t, f.kube.Delete(f.ctx, processedCommit)) // Simulate a completed commit's cleanup.
+
+	pending := &terrakojoiov1alpha1.Branch{}
+	require.NoError(t, f.kube.Get(f.ctx, client.ObjectKeyFromObject(legacy), pending))
+	pending.Finalizers = nil
+	require.NoError(t, f.kube.Update(f.ctx, pending))
+	f.reconcile(t)
+	finished := readRepo()
+	require.Equal(t, repositoryBootstrapResetDone, finished.Annotations[repositoryBootstrapResetAnnotation])
+	require.Empty(t, finished.Annotations[repositoryBootstrapResetIDAnnotation])
+	require.Equal(t, resetID, finished.Status.LastBootstrapResetID)
+	require.Equal(t, nextSHA, finished.Status.LastDefaultBranchHeadSHA)
+	require.Equal(t, 1, compareCalls, "must not replay a processed/deleted default-branch commit")
+	branches := f.branches(t)
+	require.Len(t, branches, 2)
+	require.Equal(t, "feature", branches[0].Spec.Name)
+	require.Equal(t, "feature", branches[10].Spec.Name)
+	require.NotEqual(t, branches[0].Name, branches[10].Name)
+	require.Equal(t, "10", branches[10].Annotations[externalPRIdentityAnnotation])
 }

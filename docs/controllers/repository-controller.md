@@ -17,6 +17,7 @@ It guarantees:
 - No `Owns(&Branch{})` watch is configured.
 - Reconcile triggers:
 - `Repository` create/update/delete events.
+- Annotation changes on `Repository` (for example `terrakojo.io/sync-requested-at`, `terrakojo.io/bootstrap-reset`).
 - Explicit requeue every `30m` (`repositorySyncInterval`) after successful reconcile.
 
 ## Inputs and Dependencies
@@ -27,6 +28,7 @@ It guarantees:
 - `spec.githubSecretRef`
 - Repository status fields used:
 - `status.lastDefaultBranchHeadSha`
+- `status.lastBootstrapResetID` (last atomically applied reset identity)
 - Required dependency:
 - `GitHubClientManager` (`GetClientForRepository` must succeed).
 - Kubernetes index dependency:
@@ -53,19 +55,26 @@ It guarantees:
 1. Sync from GitHub:
 - Sync default branch commits:
   - fetch default branch head SHA;
-  - compute commit SHAs between `status.lastDefaultBranchHeadSha` and head;
-  - create one `Branch` per missing SHA (default branch ref);
-  - update `status.lastDefaultBranchHeadSha` to the last processed SHA.
+  - for `terrakojo.io/bootstrap-reset=true`, persist a unique controller-owned `terrakojo.io/bootstrap-reset-id` before initializing;
+  - if bootstrapping (cursor empty, or the reset ID differs from `status.lastBootstrapResetID`):
+    - atomically set `status.lastDefaultBranchHeadSha` to current head SHA and record the reset ID in `status.lastBootstrapResetID` when resetting;
+    - set condition `BootstrapReady=True` with reason `InitializedFromHead`;
+    - do not create default-branch commit `Branch` resources in this reconcile.
+  - otherwise:
+    - compute commit SHAs between `status.lastDefaultBranchHeadSha` and head;
+    - create one `Branch` per missing SHA (default branch ref);
+    - update `status.lastDefaultBranchHeadSha` to the last processed SHA.
 - Sync non-default branch heads:
   - fetch branch heads and open PRs;
   - prefer same-repository PR head SHA for a local ref;
   - isolate external/unknown-origin PR heads by PR number;
   - ensure one `Branch` per local ref or external PR;
   - delete stale non-default `Branch` resources not present in GitHub.
+1. If `terrakojo.io/bootstrap-reset=true` was consumed successfully, controller atomically writes `done` and removes `terrakojo.io/bootstrap-reset-id`. A later explicit `true` therefore receives a new identity, including at the same HEAD.
 1. Return `RequeueAfter: 30m`.
 
 ## Default Branch Commit Sync Details
-- First sync (`lastDefaultBranchHeadSha` empty): only current head SHA is created.
+- First sync (`lastDefaultBranchHeadSha` empty): current head SHA is recorded as cutover cursor, and no default-branch commit Branch is created.
 - If cursor equals current head: no default-branch creation.
 - For historical catch-up: GitHub compare API is used via `CompareCommits`.
 - Compare failure fallback:
@@ -124,13 +133,20 @@ resources still present.
 - Finalizer handling is idempotent.
 - Default branch creation is deduplicated by existing SHA.
 - Non-default heads converge to one latest object per local ref or external PR.
-- Re-running reconcile with unchanged GitHub state yields no net resource changes.
+- Re-running reconcile with unchanged GitHub state yields no net resource changes or redundant condition/status writes.
+- A successful atomic cursor/status write defines the cutover. If it fails, the cursor and applied reset ID remain unchanged; a retry may initialize from the then-current HEAD.
+- Once an ID is recorded in status, retries never reinitialize that reset. They continue normal commit processing from the persisted cursor, even after branch/PR sync or reset acknowledgment failure.
+- A partially advanced cursor is never rewound to the original cutover: completed and deleted commit Branches must not be replayed.
+- Metadata updates retain resource-version conflict checks. A conflicting acknowledgment is returned for a fresh reconcile, not blindly retried against a potentially cancelled or replaced request.
+- An observed cancellation (`bootstrap-reset` removed or not `true`) removes a stale managed request ID. Wait for `done`, or for cancellation to be observed, before issuing another reset; writing `true` again while the same request remains pending is a retry, not a new request.
+- `LastTransitionTime` changes only when condition status changes, not for repeated failures or message changes.
 
 ## Failure Handling
 - Missing `GitHubClientManager`: hard error.
 - GitHub auth/client creation failure: hard error.
 - Branch list/create/update/delete failures: hard error.
 - Status update failure (`lastDefaultBranchHeadSha`): hard error.
+- Cutover lookup or persistence failure marks `status.conditions[type=BootstrapReady]=False` with reason `InitializationFailed`. Downstream branch/PR synchronization and reset acknowledgment errors do not invalidate an already-persisted cutover or change this condition.
 - Compare behavior prevents silent commit skips except explicit history-rewrite fallback.
 
 ## Cleanup and Deletion Semantics
@@ -154,12 +170,17 @@ Important log events:
 ## Operational Notes
 - Poll fallback interval is intentionally long (`30m`) and webhook-triggered sync is expected to handle near-real-time updates.
 - Default branch processing is incremental for large backlogs.
+- Bootstrap reset: set `metadata.annotations["terrakojo.io/bootstrap-reset"]="true"` to reinitialize cutover from current default-branch head. Controller marks completion with `"done"`.
+- `terrakojo.io/bootstrap-reset-id` and `status.lastBootstrapResetID` are controller-managed bookkeeping, not user configuration. Do not edit or copy them into Repository manifests.
+- Install the updated Repository CRD before running this controller version so the API server preserves `status.lastBootstrapResetID`.
 - This controller does not react directly to `Branch` changes; it reacts to `Repository` events plus periodic polling.
 
 ## Test Coverage Map
-Primary tests: `internal/controller/repository_controller_test.go`
+Primary tests: `internal/controller/repository_controller_test.go`, `repository_bootstrap_retry_test.go`, and `repository_bootstrap_state_test.go`
 
 Covered scenarios:
+- bootstrap retries across branch/PR fetch, request-ID, cutover-status, and acknowledgment write failures;
+- advanced cursor preservation, acknowledgment conflicts/cancellation, fresh repeated resets, and no-op condition/status writes;
 - finalizer and required labels are added.
 - default branch commit creates `Branch` resource.
 - non-default branch + PR metadata creates `Branch` with `prNumber`.
@@ -179,4 +200,3 @@ Covered scenarios:
 Known coverage gaps:
 - no direct envtest assertion for repository deletion finalizer flow waiting for owned `Branch` removal.
 - limited direct assertions around incremental cursor advancement across multiple >250 commit batches.
-
