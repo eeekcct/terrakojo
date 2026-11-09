@@ -1,0 +1,75 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "automerge": false,
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "packageRules": [
+    {
+      "description": "Track the Go version declared in go.mod.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "enabled": true
+    },
+    {
+      "description": "Update the linter CLI and CI input together.",
+      "matchPackageNames": [
+        "golangci/golangci-lint"
+      ],
+      "groupName": "golangci-lint"
+    },
+    {
+      "description": "Track immutable image digests, including the floating distroless nonroot tag.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "pinDigests": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\n)KUSTOMIZE_VERSION[ \\t]+\\?=[ \\t]+(?<currentValue>v\\d+\\.\\d+\\.\\d+)(?:[ \\t]*\\r?\\n|$)"
+      ],
+      "depNameTemplate": "kubernetes-sigs/kustomize",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver",
+      "extractVersionTemplate": "^kustomize/(?<version>v\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\n)CONTROLLER_TOOLS_VERSION[ \\t]+\\?=[ \\t]+(?<currentValue>v\\d+\\.\\d+\\.\\d+)(?:[ \\t]*\\r?\\n|$)"
+      ],
+      "depNameTemplate": "kubernetes-sigs/controller-tools",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\n)GOLANGCI_LINT_VERSION[ \\t]+\\?=[ \\t]+(?<currentValue>v\\d+\\.\\d+\\.\\d+)(?:[ \\t]*\\r?\\n|$)"
+      ],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    }
+  ]
+}
