@@ -14,9 +14,9 @@ Quick entry point for this repo:
 
 ## Dependency updates
 
-Renovate is configured in `renovate.json`. Its standard managers cover Go
+Renovate is configured in `renovate.json5`. Its standard managers cover Go
 modules, Docker images, GitHub Actions (including the golangci-lint input),
-and devcontainer dependencies. Docker dependencies are pinned to digests so
+and devcontainer dependencies. GitHub Actions are pinned to commit digests. Docker dependencies are pinned to digests so
 changes to floating image tags such as distroless `nonroot` remain reviewable.
 Custom regex managers also track the pinned
 Kustomize, controller-tools, and golangci-lint versions in `Makefile`. The
